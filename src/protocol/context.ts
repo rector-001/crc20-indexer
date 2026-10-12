@@ -20,9 +20,6 @@ export interface Ctx {
   sinks: string[];
   /** the treasury's BONS covenant (launch purchases paid in BONS pay their 20% here) */
   treasuryCovenant: string | null;
-  /** VERIFICATION ONLY — never a protocol rule. Reproduces the reference indexer's old 2% per-wallet purchase cap so a
-   *  replay can be compared with the reference ledger and every other difference shown to be zero. */
-  compat?: { walletCap?: { from: number; until: number } };
 
 }
 

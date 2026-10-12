@@ -18,7 +18,7 @@ indexed by its own published rules.
 ## Quick start (target)
 
 All you need is your own Bitcoin Core node (version 25.0 or newer) with RPC enabled. No `-txindex`, no Esplora,
-no third-party API. The indexer starts at a fixed first block per chain (mainnet 967,000) and reads each block
+no third-party API. The indexer starts at a fixed first block per chain (mainnet 968,367) and reads each block
 with `getblock <hash> 3`, which includes every input's previous output.
 
 ```

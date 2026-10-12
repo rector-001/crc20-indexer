@@ -6,7 +6,9 @@
 import { readFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
+import * as bitcoin from "bitcoinjs-lib";
 import type { Block, Tx, TxIn, TxOut } from "../protocol/types.js";
+import { markersOf } from "../protocol/message.js";
 
 export interface RpcOptions {
   url: string;                       // http://127.0.0.1:8332
@@ -14,6 +16,8 @@ export interface RpcOptions {
   password?: string;
   cookieFile?: string;
   timeoutMs?: number;
+  /** most requests in flight at once (ord: --bitcoin-rpc-limit, default 12) */
+  limit?: number;
 }
 
 const DEFAULT_PORT: Record<string, number> = { mainnet: 8332, bitcoin: 8332, signet: 38332, regtest: 18443 };
@@ -30,20 +34,53 @@ export class RpcError extends Error { constructor(public code: number, message: 
 export class BitcoinRpc {
   private auth: string;
   private id = 0;
+  private active = 0;
+  private waiting: (() => void)[] = [];
   constructor(private o: RpcOptions) {
     let user = o.username, pass = o.password;
     if (!user && o.cookieFile) [user, pass] = readFileSync(o.cookieFile, "utf8").trim().split(":") as [string, string];
-    this.auth = "Basic " + Buffer.from(`${user ?? ""}:${pass ?? ""}`).toString("base64");
+    // no credentials at all (a hosted endpoint whose URL carries its own access token): send no Authorization header
+    this.auth = user === undefined ? "" : "Basic " + Buffer.from(`${user}:${pass ?? ""}`).toString("base64");
   }
 
-  async call<T>(method: string, params: unknown[] = []): Promise<T> {
+  private async slot<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.active >= (this.o.limit ?? 12)) await new Promise<void>((r) => this.waiting.push(r));
+    this.active++;
+    try {
+      // a hosted node answering 429 (rate limit) is asked again after a pause — slowing down, never failing
+      for (let wait = 1000; ; wait = Math.min(wait * 2, 30_000)) {
+        try { return await fn(); }
+        catch (e) { if (!(e instanceof RpcError && e.code === 429)) throw e; await new Promise((r) => setTimeout(r, wait)); }
+      }
+    } finally { this.active--; this.waiting.shift()?.(); }
+  }
+
+  /** Several calls in one HTTP request (JSON-RPC batch); results in the same order. */
+  batch<T>(calls: { method: string; params: unknown[] }[]): Promise<T[]> {
+    return this.slot(async () => {
+      const r = await fetch(this.o.url, {
+        method: "POST", headers: { "content-type": "application/json", ...(this.auth ? { authorization: this.auth } : {}) },
+        body: JSON.stringify(calls.map((c, i) => ({ jsonrpc: "1.0", id: i, method: c.method, params: c.params }))),
+        signal: AbortSignal.timeout(this.o.timeoutMs ?? 120_000),
+      });
+      if (r.status === 429) throw new RpcError(429, "rate limited");
+      const j = (await r.json().catch(() => null)) as { id: number; result?: T; error?: { code: number; message: string } }[] | null;
+      if (!Array.isArray(j)) throw new RpcError(-1, `bad RPC batch response (HTTP ${r.status})`);
+      j.sort((a, b) => a.id - b.id);
+      return j.map((x) => { if (x.error) throw new RpcError(x.error.code, x.error.message); return x.result as T; });
+    });
+  }
+
+  call<T>(method: string, params: unknown[] = []): Promise<T> { return this.slot(() => this.call1<T>(method, params)); }
+  private async call1<T>(method: string, params: unknown[]): Promise<T> {
     const r = await fetch(this.o.url, {
       method: "POST",
-      headers: { "content-type": "application/json", authorization: this.auth },
+      headers: { "content-type": "application/json", ...(this.auth ? { authorization: this.auth } : {}) },
       body: JSON.stringify({ jsonrpc: "1.0", id: ++this.id, method, params }),
       signal: AbortSignal.timeout(this.o.timeoutMs ?? 120_000),
     });
     if (r.status === 401) throw new RpcError(-1, "Bitcoin Core refused the RPC credentials (check --cookie-file or --bitcoin-rpc-username/password)");
+    if (r.status === 429) throw new RpcError(429, "rate limited");
     const j = (await r.json().catch(() => null)) as { result?: T; error?: { code: number; message: string } } | null;
     if (!j) throw new RpcError(-1, `bad RPC response (HTTP ${r.status})`);
     if (j.error) throw new RpcError(j.error.code, j.error.message);
@@ -60,6 +97,27 @@ export class BitcoinRpc {
   async getBlock(hash: string): Promise<Block & { prev: string | null; time: number }> {
     const b = await this.call<CoreBlock>("getblock", [hash, 3]);
     return { height: b.height, hash: b.hash, prev: b.previousblockhash ?? null, time: b.time, txs: b.tx.map(toTx) };
+  }
+  /** LOOKUP MODE (for a remote node, where a verbosity-3 block is ~4x the bytes): the raw block, parsed here, and
+   *  prevouts fetched only for the transactions that carry a CRC-20 marker — the only ones the rules read prevouts of. */
+  async getBlockLookup(hash: string, network: bitcoin.Network, height: number, opts: { rest?: string; needAll?: (h: number) => boolean } = {}): Promise<Block & { prev: string | null; time: number }> {
+    const raw = opts.rest ? await restBlock(opts.rest, hash) : Buffer.from(await this.call<string>("getblock", [hash, 0]), "hex");
+    // 80-byte header: version(4) prev(32) merkle(32) time(4) bits(4) nonce(4)
+    const prev = Buffer.from(raw.subarray(4, 36)).reverse().toString("hex"), time = raw.readUInt32LE(68);
+    /* PREFILTER: a block with no `"crc-20"` bytes holds no marker, so no rule touches it. When its BTC/USD is also
+     * already known (pinned for every height up to a release), nothing in it is needed and it is not parsed at all. */
+    if (raw.indexOf(MARKER_BYTES) < 0 && !(opts.needAll?.(height) ?? true)) return { height, hash, prev, time, txs: [] };
+    const blk = bitcoin.Block.fromBuffer(raw);
+    const txs = (blk.transactions ?? []).map((t, i) => rawToTx(t, i === 0));
+    const need = txs.filter((t) => markersOf(t).length > 0);
+    // addresses only where the rules read them: the outputs of transactions that carry a marker
+    for (const t of need) for (const o of t.vout) { const a = addressOf(Buffer.from(o.scriptpubkey, "hex"), network); if (a) o.scriptpubkey_address = a; }
+    for (let i = 0; i < need.length; i += 50) {
+      const chunk = need.slice(i, i + 50);
+      const full = await this.batch<CoreTx>(chunk.map((t) => ({ method: "getrawtransaction", params: [t.txid, 2, hash] })));
+      chunk.forEach((t, j) => { const f = full[j]!; t.vin.forEach((v, k) => { const p = f.vin[k]?.prevout; if (p) v.prevout = toOut(p); }); });
+    }
+    return { height, hash, prev, time, txs };
   }
   getRawMempool = () => this.call<string[]>("getrawmempool");
   /** a mempool (or, with -txindex, any) transaction, its prevouts included (verbosity 2) — null when unknown */
@@ -103,6 +161,52 @@ function toTx(t: CoreTx): Tx {
   };
 }
 
+/** Every CRC-20 marker contains these bytes (`"crc-20"`), so their absence rules a block out without parsing it. */
+const MARKER_BYTES = Buffer.from('"crc-20"', "utf8");
+
+/** A raw block from Bitcoin Core's REST interface (bitcoind -rest=1): binary, no JSON or hex — the fastest way to read
+ *  blocks from a node short of reading its block files. `base` is e.g. http://127.0.0.1:8332 */
+async function restBlock(base: string, hash: string): Promise<Buffer> {
+  const r = await fetch(`${base.replace(/\/$/, "")}/rest/block/${hash}.bin`, { signal: AbortSignal.timeout(120_000) });
+  if (r.status === 429) throw new RpcError(429, "rate limited");
+  if (!r.ok) throw new RpcError(-1, `REST block ${hash}: HTTP ${r.status} (is bitcoind running with -rest=1?)`);
+  return Buffer.from(await r.arrayBuffer());
+}
+
+/** An output script's address, encoded directly (no curve checks — bitcoinjs's fromOutputScript validates every Taproot
+ *  key, which made a full mainnet block cost seconds of CPU). Same strings as Bitcoin Core for every standard type. */
+export function addressOf(s: Buffer, network: bitcoin.Network): string | undefined {
+  try {
+    if (s.length === 25 && s[0] === 0x76 && s[1] === 0xa9 && s[2] === 0x14 && s[23] === 0x88 && s[24] === 0xac)
+      return bitcoin.address.toBase58Check(s.subarray(3, 23), network.pubKeyHash);
+    if (s.length === 23 && s[0] === 0xa9 && s[1] === 0x14 && s[22] === 0x87) return bitcoin.address.toBase58Check(s.subarray(2, 22), network.scriptHash);
+    const v = s[0], len = s[1];
+    if (s.length >= 4 && s.length <= 42 && len === s.length - 2 && len >= 2 && len <= 40 && (v === 0x00 || (v! >= 0x51 && v! <= 0x60))) {
+      const version = v === 0x00 ? 0 : v! - 0x50;
+      if (version === 0 && len !== 20 && len !== 32) return undefined;
+      return bitcoin.address.toBech32(s.subarray(2), version, network.bech32);
+    }
+  } catch { /* not encodable */ }
+  return undefined;
+}
+
+/** A raw transaction (bitcoinjs) in the shape the core reads; addresses and prevouts are filled in afterwards where needed. */
+function rawToTx(t: bitcoin.Transaction, coinbase: boolean): Tx {
+  const outType = (s: Buffer): string => s[0] === 0x6a ? "op_return" : s.length === 34 && s[0] === 0x51 && s[1] === 0x20 ? "v1_p2tr"
+    : s.length === 22 && s[0] === 0x00 && s[1] === 0x14 ? "v0_p2wpkh" : s.length === 34 && s[0] === 0x00 && s[1] === 0x20 ? "v0_p2wsh" : "other";
+  return {
+    txid: t.getId(),
+    vin: t.ins.map((i): TxIn => ({
+      txid: coinbase ? "0".repeat(64) : Buffer.from(i.hash).reverse().toString("hex"), vout: coinbase ? 0xffffffff : i.index,
+      witness: (i.witness ?? []).map((w) => Buffer.from(w).toString("hex")), prevout: null, sequence: i.sequence, ...(coinbase ? { is_coinbase: true } : {}),
+    })),
+    vout: t.outs.map((o): TxOut => {
+      const script = Buffer.from(o.script);
+      return { value: Number(o.value), scriptpubkey: script.toString("hex"), scriptpubkey_type: outType(script) };
+    }),
+  };
+}
+
 /* ── block fetcher: runs ahead of the indexer, bounded, with retries ───────────────────────────────────────────────── */
 
 export interface FetchedBlock extends Block { prev: string | null; time: number }
@@ -110,7 +214,16 @@ export interface FetchedBlock extends Block { prev: string | null; time: number 
 /** Blocks from `from` up to the tip (or `limit`), in order. Like ord: up to `ahead` blocks are fetched before they are
  *  consumed; a failing call retries after 1, 2, 4 … s and gives up beyond 120 s. Below `firstBlock` only the header is
  *  read (no transactions), which is all reorg detection needs. */
-export async function* fetchBlocks(rpc: BitcoinRpc, from: number, opts: { firstBlock: number; limit?: number; ahead?: number; log?: (m: string) => void }): AsyncGenerator<FetchedBlock> {
+export interface FetchOptions {
+  firstBlock: number; limit?: number; ahead?: number; log?: (m: string) => void;
+  /** raw blocks parsed here, prevouts looked up for marker transactions only */
+  lookup?: bitcoin.Network;
+  /** read raw blocks from Bitcoin Core's REST interface at this base URL (implies lookup) */
+  rest?: string;
+  /** must every transaction of block h be parsed (its BTC/USD is not known yet)? */
+  needAll?: (h: number) => boolean;
+}
+export async function* fetchBlocks(rpc: BitcoinRpc, from: number, opts: FetchOptions): AsyncGenerator<FetchedBlock> {
   const ahead = opts.ahead ?? 32;
   const queue: Promise<FetchedBlock | null>[] = [];
   let next = from;
@@ -121,8 +234,8 @@ export async function* fetchBlocks(rpc: BitcoinRpc, from: number, opts: { firstB
       const hd = await rpc.getBlockHeader(hash);
       return { height: h, hash, prev: hd.previousblockhash ?? null, time: hd.time, txs: [] };
     }
-    return rpc.getBlock(hash);
-  }, opts.log, h);
+    return opts.lookup ? rpc.getBlockLookup(hash, opts.lookup, h, { rest: opts.rest, needAll: opts.needAll }) : rpc.getBlock(hash);
+  }, opts.log, h).catch((e) => { throw e; });
   const fill = () => { while (queue.length < ahead && (opts.limit === undefined || next < opts.limit)) queue.push(one(next++)); };
   fill();
   while (queue.length) {

@@ -1,5 +1,5 @@
-// MINT. Ported from crc20-stack src/indexer.mjs (op "mint", applyLaunchMint, launchPurchaseShape / applyLaunchPurchase),
-// without the 2% per-wallet cap (it is not in the deploy JSON and nothing on chain enforces it).
+// MINT. Ported from crc20-stack src/indexer.mjs (op "mint", applyLaunchMint, launchPurchaseShape / applyLaunchPurchase).
+// The 2% per-buyer cap applies only in its historical window (constants: launchWalletCap).
 //
 //   BONS            marker {"op":"mint","tick":"BONS"}: BTC paid to the treasury, priced on the BONS curve
 //   bonding token   marker {"op":"mint","tick":T}: BTC paid in the 45/45/10 split (creator / flywheel / treasury) or,
@@ -43,10 +43,10 @@ export function applyBonsMint(c: Ctx, t: Tx, height: number, mk: Marker, btcUsd:
 }
 
 
-/** VERIFICATION ONLY (Ctx.compat): the reference's old 2% per-wallet cap. Returns the atoms allowed, 0n = none. */
-function compatCap(c: Ctx, tick: string, allocCov: string, atoms: bigint, height: number): bigint {
-  const w = c.compat?.walletCap;
-  if (!w || height < w.from || height >= w.until) return atoms;
+/** The historical 2% per-buyer cap (constants: launchWalletCap). Returns the atoms allowed, 0n = none. */
+function walletCap(c: Ctx, tick: string, allocCov: string, atoms: bigint, height: number): bigint {
+  const w = c.net.activations.launchWalletCap;
+  if (!w || height < w.from || (w.until !== null && height >= w.until)) return atoms;
   const CAP = (1_000_000_000n * 100_000_000n * 200n) / 10_000n;
   const had = all<{ atoms: string }>(c.db, "SELECT atoms FROM deltas WHERE op=? AND to_addr=?", `mint:${tick}`, allocCov).reduce((a, r) => a + BigInt(r.atoms), 0n);
   const room = CAP - had;
@@ -91,7 +91,7 @@ export function applyTokenMint(c: Ctx, t: Tx, height: number, mk: Marker) {
   if (sealVout < 0) return;
   const q = quoteLaunch(BigInt(dep.target_sats), getMintedAtoms(c.db, mk.tick), capital * 1_000_000n);
   if (q.atoms <= 0n) return;
-  q.atoms = compatCap(c, mk.tick, allocCov, q.atoms, height);
+  q.atoms = walletCap(c, mk.tick, allocCov, q.atoms, height);
   if (q.atoms <= 0n) return;
   tx(c.db, () => {
     createSeal(c.db, { outpoint: `${t.txid}:${sealVout}`, tick: mk.tick, txid: t.txid, vout: sealVout, height, owner_address: allocCov,
@@ -140,7 +140,7 @@ export function applyBonsPurchase(c: Ctx, t: Tx, height: number, shape: BonsPurc
   if (launchStatus(dep, getMintedAtoms(c.db, dep.tick), height) !== "minting") return;
   const q = quoteLaunch(BigInt(dep.target_sats), getMintedAtoms(c.db, dep.tick), bonsBudgetMicroSats(JSON.parse(dep.rate_json), P));
   if (q.atoms <= 0n) return;
-  q.atoms = compatCap(c, dep.tick, alloc.scriptpubkey_address, q.atoms, height);
+  q.atoms = walletCap(c, dep.tick, alloc.scriptpubkey_address, q.atoms, height);
   if (q.atoms <= 0n) return;
   tx(c.db, () => {
     createSeal(c.db, { outpoint: `${t.txid}:${k + 1}`, tick: dep.tick, txid: t.txid, vout: k + 1, height, owner_address: alloc.scriptpubkey_address!,

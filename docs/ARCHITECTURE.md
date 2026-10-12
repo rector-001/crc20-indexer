@@ -32,7 +32,7 @@ detection), never transactions.
 
 | Chain | First block | Why |
 | --- | --- | --- |
-| mainnet | 967,000 | Before the BONS deploy (968,368). Earlier other-ticker deploys (TREE, MEME, PIZZA …) occupy their tickers, so they are read too |
+| mainnet | 968,367 | The block before the BONS deploy (968,368); the same first block as the live ledger |
 | regtest | 1 | |
 
 The first block is code (`src/networks`), not a setting. Starting anywhere else would build a different ledger.
@@ -48,6 +48,16 @@ output is a token coin, and Taproot checks on witnesses.
   script, address, type), read from the node's own undo data. One call per block covers everything, with no
   `-txindex` and no UTXO table of our own. A pruned node works as long as it still holds the blocks from the first
   block on.
+
+**Remote or hosted nodes** (`--prevouts lookup`): over a network link a verbosity-3 block is about 4× the bytes of the
+raw block (13 MB versus 3.2 MB for a full mainnet block). In lookup mode the indexer instead:
+- fetches the raw block (`getblock <hash> 0`) and parses it locally;
+- asks for prevouts only for the few transactions that carry a CRC-20 marker, with `getrawtransaction <txid> 2
+  <blockhash>`. This works without `-txindex` too, because the block hash lets Core read its undo data.
+
+Those are the only transactions whose prevouts the rules read, so the ledger is identical either way. A node that
+answers HTTP 429 (rate limited) is slowed down, never treated as failing: the call waits and retries.
+`--bitcoin-rpc-limit` and `--prefetch` set how hard the node is pushed.
 
 Fetching works like ord's: a background fetcher runs ahead on its own task, holding up to 32 blocks in a bounded
 queue. It retries with exponential backoff (1 s, 2 s … up to 120 s), then stops and reports.

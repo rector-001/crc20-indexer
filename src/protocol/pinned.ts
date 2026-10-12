@@ -8,7 +8,8 @@ import type { NetworkName } from "./constants/index.js";
 
 /** file name -> sha256 of its exact bytes */
 export const PINNED: Partial<Record<NetworkName, { file: string; sha256: string }[]>> = {
-  bitcoin: [{ file: "mainnet-bons-mint-oracle.json", sha256: "88f92e00b53f34c363b263d2c99884f9083715f50239b640c3b7c9d4be3db71f" }],
+  // every height the reference ledger priced, 968,367 – 971,141 (the BONS mint window inside it matches mainnet-bons-mint-oracle.json)
+  bitcoin: [{ file: "mainnet-oracle.json", sha256: "e3ce68062b88b7d43b74c6b78e1df16be19197fd9275b7405ebbed4836b6bc4e" }],
 };
 
 const here = dirname(fileURLToPath(import.meta.url));

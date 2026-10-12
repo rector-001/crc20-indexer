@@ -13,6 +13,10 @@ export interface Activations {
   merge: Activation;
   /** before this height every non-BONS deploy is stored as written (mainnet history: TREE @968598) */
   legacyDeploysUntil: number;
+  /** HISTORICAL: a bonding-token purchase is capped at 2% of supply (20,000,000 tokens) per buyer covenant, from `from`
+   *  until `until` (exclusive; null = until a removal height is announced). The reference indexer enforced it on
+   *  mainnet from 969,196 and capped 11 purchases; it stays for that window so no past balance changes. */
+  launchWalletCap: { from: number; until: number | null } | null;
 }
 
 /** Is a rule in force at `height`? A pending rule never is. */
@@ -47,7 +51,7 @@ export const NETWORKS: Record<NetworkName, NetworkConstants> = {
   bitcoin: {
     name: "bitcoin",
     bitcoin: bitcoin.networks.bitcoin,
-    deployBlock: 967000,
+    deployBlock: 968367,                         // the live ledger's first block (BONS deploys at 968,368)
     bonsMax: 21_000_000n,
     bonsLim: 44_100_000n,
     addresses: {
@@ -64,6 +68,7 @@ export const NETWORKS: Record<NetworkName, NetworkConstants> = {
     launchTargetMinUsd: 1_000,
     activations: {
       merge: 969976,
+      launchWalletCap: { from: 969196, until: null },   // the live config (BONS_LAUNCH_WALLET_CAP_FROM); removal height to be announced
       legacyDeploysUntil: 968745,
     },
   },
@@ -78,6 +83,7 @@ export const NETWORKS: Record<NetworkName, NetworkConstants> = {
     launchTargetMinUsd: 1_000,
     activations: {
       merge: 0,
+      launchWalletCap: { from: 0, until: null },        // the reference regtest suites test the cap
       legacyDeploysUntil: 0,
     },
   },

@@ -102,9 +102,10 @@ Marker `{"p":"crc-20","op":"mint","tick":"BONS"}`; the token must be deployed.
 - **Amount:** exact area under the launch curve, p0 → 4·p0 over 1B tokens (`quoteLaunch`, rounded so a buy never
   pays less than the curve):
   `cost(x→x+Δ) = T·(2AΔ + 6xΔ + 3Δ²)/(5A²)`
-- **No per-wallet cap.** The cap is not in the deploy JSON and nothing on chain enforces it, so it is not part of
-  the protocol. The reference indexer applied a 2% cap from block 969,215; the replay lists any purchase it
-  changed.
+- **Per-buyer cap (historical window):** from block 969,196 on mainnet, a purchase is capped at 2% of supply
+  (20,000,000 tokens) per buyer covenant, and the rest of the payment is owed back. The cap is not in the deploy
+  JSON. It stays only for the window the live indexer enforced it (11 mainnet purchases were capped), so no past
+  balance changes. It ends at a removal height to be announced.
 - **Shortfalls:** anything paid that bought nothing, or bought less (sold out, cap reached, closed), is written to
   `launch_refunds`. Every payment is written to `launch_payments`.
 
@@ -120,7 +121,7 @@ Marker `{"p":"crc-20","op":"mint","tick":"BONS"}`; the token must be deployed.
     leaf);
   - the raise is open.
 - **Amount:** `P` BONS valued at the deploy's fixed `bons` rate (`P·bons·1e6/btc` micro-sats) on the launch curve,
-  and the same refund list.
+  with the same per-buyer cap (in its window).
 
 ## 6. Transfer (marker `op:"transfer"`)
 
@@ -183,6 +184,7 @@ Marker `{"p":"crc-20","op":"mint","tick":"BONS"}`; the token must be deployed.
 | Merge | **969,976** | 0 |
 | Holding address for BTC purchases | 969,196 | 0 |
 | Pre-burn holding for BONS purchases | 969,201 | 0 |
+| Per-buyer 2% cap (historical) | 969,196 → removal height to be announced | 0 → |
 
 
 ## 11. Known issues in our own rules (fix or freeze before publishing)

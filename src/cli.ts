@@ -18,11 +18,15 @@ import { openLedger, all, getCursor } from "./store/ledger.js";
 import { BitcoinRpc, defaultCookieFile, defaultRpcUrl } from "./index/fetcher.js";
 import { updateIndex } from "./index/updater.js";
 
+const BOOLEAN = new Set(["no-auth"]);
 function parse(argv: string[]) {
   const flags: Record<string, string> = {}, rest: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
-    if (a.startsWith("--")) { const [k, v] = a.slice(2).split("=", 2) as [string, string | undefined]; flags[k] = v ?? argv[++i] ?? ""; }
+    if (a.startsWith("--")) {
+      const [k, v] = a.slice(2).split("=", 2) as [string, string | undefined];
+      flags[k] = v ?? (BOOLEAN.has(k) ? "1" : argv[++i] ?? "");
+    }
     else if (a === "-r") flags.chain = "regtest";
     else rest.push(a);
   }
@@ -50,13 +54,12 @@ async function main() {
   mkdirSync(dataDir, { recursive: true });
   const db = openLedger(flags.index ?? join(dataDir, "index.sqlite"));
   const c = makeCtx(db, net);
-  // VERIFICATION ONLY: --compat-wallet-cap FROM[:UNTIL] reproduces the reference's old 2% cap, to compare ledgers
-  if (flags["compat-wallet-cap"]) { const [f, u] = flags["compat-wallet-cap"].split(":"); c.compat = { walletCap: { from: Number(f), until: u ? Number(u) : Infinity } }; }
 
   if (rest[0] === "index" && rest[1] === "update") {
     const rpc = new BitcoinRpc({ url: flags["bitcoin-rpc-url"] ?? defaultRpcUrl(chainArg),
       username: flags["bitcoin-rpc-username"], password: flags["bitcoin-rpc-password"],
-      cookieFile: flags["bitcoin-rpc-username"] ? undefined : (flags["cookie-file"] ?? defaultCookieFile(chainArg, flags["bitcoin-data-dir"])) });
+      cookieFile: flags["bitcoin-rpc-username"] || flags["no-auth"] !== undefined ? undefined : (flags["cookie-file"] ?? defaultCookieFile(chainArg, flags["bitcoin-data-dir"])),
+      limit: flags["bitcoin-rpc-limit"] ? Number(flags["bitcoin-rpc-limit"]) : undefined });
     await rpc.checkVersion();
     let stop = false;
     process.on("SIGINT", () => { stop = true; console.error("stopping after this block…"); });
@@ -64,7 +67,10 @@ async function main() {
     const end = await updateIndex(c, rpc, { pinned: loadPinnedOracle(network), fixedUsd }, {
       commitInterval: flags["commit-interval"] ? Number(flags["commit-interval"]) : undefined,
       heightLimit: flags["height-limit"] ? Number(flags["height-limit"]) : undefined,
-      log: (m) => console.error(m), shouldStop: () => stop });
+      log: (m) => console.error(m), shouldStop: () => stop, // default: raw blocks + prevouts only for marker transactions; --prevouts block = getblock verbosity 3
+      lookup: flags.prevouts !== "block",
+      prefetch: flags.prefetch ? Number(flags.prefetch) : undefined,
+      rest: flags["bitcoin-rest-url"] || undefined });
     console.log(JSON.stringify({ chain: chainArg, indexed_to: end - 1 }));
     return;
   }

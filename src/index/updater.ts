@@ -1,7 +1,7 @@
 // The block loop, modelled on ord's Updater: blocks come from the fetcher in order; each is checked against the stored
 // hash below it (reorg), priced (oracle), and applied; many blocks share one commit during the initial sync, and near
 // the tip every block is its own commit so a reorg can always be undone.
-import { type Db, getBlockHash, getCursor, putBlockHash, rewindTo, setCursor, tx } from "../store/ledger.js";
+import { type Db, getBlockHash, getCursor, getOracle, putBlockHash, rewindTo, setCursor, tx } from "../store/ledger.js";
 import type { Ctx } from "../protocol/context.js";
 import { applyTx } from "../protocol/dispatch.js";
 import { oracleForHeight, type OracleSource } from "../protocol/oracle.js";
@@ -13,6 +13,12 @@ export interface UpdateOptions {
   heightLimit?: number;          // stop before this height
   log?: (m: string) => void;
   shouldStop?: () => boolean;
+  /** fetch raw blocks and look prevouts up only for marker transactions (remote nodes) */
+  lookup?: boolean;
+  /** blocks fetched ahead of the one being indexed (default 32) */
+  prefetch?: number;
+  /** read raw blocks from Bitcoin Core's REST interface (bitcoind -rest=1) at this base URL */
+  rest?: string;
 }
 
 /** Apply one block: every transaction in order. */
@@ -47,7 +53,9 @@ export async function updateIndex(c: Ctx, rpc: BitcoinRpc, oracle: OracleSource,
     let inBatch = 0, reorgAt: number | null = null;
     c.db.exec("BEGIN");
     try {
-      for await (const b of fetchBlocks(rpc, from, { firstBlock: first, limit: o.heightLimit, log })) {
+      for await (const b of fetchBlocks(rpc, from, { firstBlock: first, limit: o.heightLimit, log, lookup: o.lookup || o.rest ? c.btc : undefined, rest: o.rest, ahead: o.prefetch,
+        // a block's transactions are only needed when its BTC/USD must still be computed from them
+        needAll: (h) => !oracle.fixedUsd && !oracle.pinned.has(h) && getOracle(c.db, h) == null })) {
         const below = getBlockHash(c.db, b.height - 1);
         if (below !== null && b.prev !== below) { reorgAt = b.height; break; }
         indexBlock(c, b, oracle);

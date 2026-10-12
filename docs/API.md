@@ -7,6 +7,15 @@ address/token/UTXO endpoints wallets such as UniSat already use for BRC-20 and r
 Every node computes the same ledger from Bitcoin plus the pinned data shipped with the release. Any two
 honest nodes at the same height answer the same.
 
+## Status in this release (0.1)
+
+| Implemented | Coming next |
+| --- | --- |
+| `/v1/status`, `/v1/rules`, `/v1/tokens`, `/v1/tokens/{tick}` (+ `/holders`, `/activity`), `/v1/addresses/{address}/` (`balances`, `coins` with signing data, `covenants`, `activity`, `protected-outputs`), `/v1/outputs/{outpoint}`, `POST /v1/outputs/check`, `/v1/transactions/{txid}`, `/v1/blocks/{height}`, `/v1/events`, and the ord-compatible routes | `?mempool=1` (pending in / out), `POST /v1/transactions/simulate`, `/v1/events/stream`, `/v1/tokens/{tick}/quote/mint`, the `/v1/build/*` PSBT builders, the UniSat-style aliases |
+
+`crc20 server --http-port 8640` keeps syncing and serves the API from a read-only connection, so an answer only
+ever reflects committed blocks.
+
 ## Conventions
 
 | | |

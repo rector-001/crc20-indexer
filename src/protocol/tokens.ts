@@ -62,6 +62,31 @@ export function linkFunders(c: Ctx, t: Tx, covenants: (string | null | undefined
   }
 }
 
+/** precop-style, but only exact proofs: every key in a marker transaction that rebuilds a coin's covenant (for that
+ *  coin's token) proves its owner — a Taproot input or output key (the wallet is that Taproot address) or a full
+ *  public key in a witness (the wallet is its P2WPKH address). A bare 32-byte witness item is never assumed to be a wallet. */
+export function linkTxKeys(c: Ctx, t: Tx) {
+  const created = all<{ owner_address: string; tick: string }>(c.db,
+    "SELECT DISTINCT s.owner_address, s.tick FROM seals s LEFT JOIN covenant_owners o ON o.covenant_address = s.owner_address WHERE s.txid = ? AND o.covenant_address IS NULL", t.txid);
+  if (!created.length) return;
+  const keys = new Map<string, string>();                     // x-only key -> wallet address
+  const taproot = (spk?: string, addr?: string) => { if (spk && addr && spk.length === 68 && spk.startsWith("5120")) keys.set(spk.slice(4), addr); };
+  for (const v of t.vin) taproot(v.prevout?.scriptpubkey, v.prevout?.scriptpubkey_address);
+  for (const o of t.vout) taproot(o.scriptpubkey, o.scriptpubkey_address);
+  for (const v of t.vin) for (const w of v.witness ?? []) {
+    if (w.length === 66 && (w.startsWith("02") || w.startsWith("03"))) {
+      try { const a = bitcoin.payments.p2wpkh({ pubkey: Buffer.from(w, "hex"), network: c.btc }).address; if (a && !keys.has(w.slice(2))) keys.set(w.slice(2), a); } catch { /* not a key */ }
+    }
+  }
+  for (const { owner_address, tick } of created) {
+    const cmr = tick === TICK ? BONS_CMR : deployOf(c, tick)?.cmr;
+    if (!cmr) continue;
+    for (const [k, wallet] of keys) {
+      try { if (deriveCovenant(k, cmr, c.btc).address === owner_address) { setCovenantOwner(c.db, owner_address, wallet, k, "tx-key"); break; } } catch { /* not a valid key */ }
+    }
+  }
+}
+
 /* ── BONS price from sales read off the chain (micro-sats per whole BONS) ─────────────────────────────────────────── */
 
 export function recordBonsFill(c: Ctx, f: { txid: string; height: number; sats: number; atoms: bigint }) {

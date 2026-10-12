@@ -17,6 +17,9 @@ import { loadPinnedOracle } from "./protocol/pinned.js";
 import { openLedger, all, getCursor } from "./store/ledger.js";
 import { BitcoinRpc, defaultCookieFile, defaultRpcUrl } from "./index/fetcher.js";
 import { updateIndex } from "./index/updater.js";
+import { startApi } from "./api/server.js";
+import { PINNED } from "./protocol/pinned.js";
+import { DatabaseSync } from "node:sqlite";
 
 const BOOLEAN = new Set(["no-auth"]);
 function parse(argv: string[]) {
@@ -74,6 +77,33 @@ async function main() {
     console.log(JSON.stringify({ chain: chainArg, indexed_to: end - 1 }));
     return;
   }
+  if (rest[0] === "server") {
+    // keep syncing in this process, and serve the API from a READ-ONLY connection (it only ever sees committed blocks)
+    const indexPath = flags.index ?? join(dataDir, "index.sqlite");
+    const reader = new DatabaseSync(indexPath, { readOnly: true });
+    const rc = makeCtx(reader, net);
+    const rpc = new BitcoinRpc({ url: flags["bitcoin-rpc-url"] ?? defaultRpcUrl(chainArg),
+      username: flags["bitcoin-rpc-username"], password: flags["bitcoin-rpc-password"],
+      cookieFile: flags["bitcoin-rpc-username"] || flags["no-auth"] !== undefined ? undefined : (flags["cookie-file"] ?? defaultCookieFile(chainArg, flags["bitcoin-data-dir"])),
+      limit: flags["bitcoin-rpc-limit"] ? Number(flags["bitcoin-rpc-limit"]) : undefined });
+    let tip: number | null = null;
+    const port = Number(flags["http-port"] ?? 8640);
+    startApi(rc, { port, host: flags["http-host"] ?? "127.0.0.1", version: "0.1.0", chainTip: () => tip,
+      pinned: Object.fromEntries((PINNED[network] ?? []).map((p) => [p.file, `sha256:${p.sha256}`])) });
+    console.error(`crc20 ${chainArg}: API on http://${flags["http-host"] ?? "127.0.0.1"}:${port}/v1/status`);
+    const fixedUsd = network === "regtest" ? (flags["regtest-oracle-usd"] ?? null) : null;
+    const pinned = loadPinnedOracle(network);
+    const interval = Number(flags["poll-seconds"] ?? 10) * 1000;
+    for (;;) {
+      try {
+        tip = await rpc.getBlockCount();
+        await updateIndex(c, rpc, { pinned, fixedUsd }, { log: (m) => console.error(m), lookup: flags.prevouts !== "block",
+          prefetch: flags.prefetch ? Number(flags.prefetch) : undefined, rest: flags["bitcoin-rest-url"] || undefined,
+          heightLimit: flags["height-limit"] ? Number(flags["height-limit"]) : undefined });
+      } catch (e) { console.error(`sync: ${(e as Error).message} — retrying`); }
+      await new Promise((r) => setTimeout(r, interval));
+    }
+  }
   if (rest[0] === "index" && rest[1] === "export") {
     const h = createHash("sha256"), lines: string[] = [];
     for (const [table, order] of EXPORT_TABLES)
@@ -86,7 +116,7 @@ async function main() {
     console.log(JSON.stringify(out));
     return;
   }
-  console.error("usage: crc20 [--chain mainnet|regtest] [--bitcoin-rpc-url URL] [--cookie-file F] [--data-dir D] index update | index export [--out FILE]");
+  console.error("usage: crc20 [--chain mainnet|regtest] [--bitcoin-rpc-url URL] [--cookie-file F] [--data-dir D] index update | index export [--out FILE] | server [--http-port 8640]");
   process.exitCode = 2;
 }
 

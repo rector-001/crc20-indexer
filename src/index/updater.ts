@@ -4,6 +4,8 @@
 import { type Db, getBlockHash, getCursor, getOracle, putBlockHash, rewindTo, setCursor, tx } from "../store/ledger.js";
 import type { Ctx } from "../protocol/context.js";
 import { applyTx } from "../protocol/dispatch.js";
+import { linkTxKeys } from "../protocol/tokens.js";
+import { markersOf } from "../protocol/message.js";
 import { oracleForHeight, type OracleSource } from "../protocol/oracle.js";
 import { type BitcoinRpc, fetchBlocks, type FetchedBlock } from "./fetcher.js";
 
@@ -26,7 +28,10 @@ export function indexBlock(c: Ctx, b: FetchedBlock, oracle: OracleSource) {
   const h = b.height;
   tx(c.db, () => {
     const btcUsd = oracleForHeight(c.db, h, b.txs, oracle);
-    for (const t of b.txs) applyTx(c, t, h, btcUsd);
+    for (const t of b.txs) {
+      applyTx(c, t, h, btcUsd);
+      if (markersOf(t).length) linkTxKeys(c, t);             // proven owners of the coins it created (not consensus)
+    }
     putBlockHash(c.db, h, b.hash);
     setCursor(c.db, h + 1);
   });

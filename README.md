@@ -65,6 +65,17 @@ test/
 4. **Rule changes** are announced with an activation height, together with this repo's release, before they take
    effect on mainnet.
 
+## Verified
+
+| Chain | Blocks | Result |
+| --- | --- | --- |
+| mainnet | 968,367 → 971,141 (2,775 blocks, 8.6 min over a hosted RPC node) | **Identical** to the live ledger on every table that decides balances: 6,272 coins, 1,209 balances, 41 token deploys, 5,665 ledger events, 39 proof-of-burns, 1,267 BONS sales, and every supply and raise counter |
+| regtest | 1 → 1,131 (reference test suites, every live rule) | **Identical**; both fetch paths (verbosity 3, and raw blocks with the marker prefilter) give the same ledger hash |
+
+Two informational tables are not compared:
+- **Proven covenant owners:** the live site also records owners from wallet connections, which is not chain data.
+- **Rejected deploys from before block 969,186:** the live database started keeping that list there.
+
 ## Licence
 
 MIT. See [LICENSE](LICENSE).

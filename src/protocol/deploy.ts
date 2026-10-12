@@ -28,8 +28,8 @@ export function applyDeploy(c: Ctx, t: Tx, height: number, mk: Marker, btcUsd: s
     t.txid, tick, height, creator, JSON.stringify(m).slice(0, 2000), reason);
   if (isDeployed(c, tick)) return void other("ticker already exists");
   if (!TICKER_RE.test(tick)) return void other("ticker must be exactly 4 letters (A-Z)");
-  if (m.type !== "bonding") return void other(`type ${JSON.stringify(m.type ?? null)} — not a bonding token`);
-  if (String(m.max) !== LAUNCH_SUPPLY || String(m.lim) !== LAUNCH_SUPPLY) return void other("supply is not 1,000,000,000");
+  if (m.type !== "bonding") return void other(`type ${JSON.stringify(m.type ?? null)} — not a launchpad bonding token`);
+  if (String(m.max) !== LAUNCH_SUPPLY || String(m.lim) !== LAUNCH_SUPPLY) return void other("supply is not the launchpad's 1,000,000,000");
   const rateBtc = parseRate(m.btc), rateBons = parseRate(m.bons);
   if (!rateBtc || !rateBons) return void other("missing raise-token rates (btc and bons)");
   const targetSats = targetSatsOfRate(rateBtc);

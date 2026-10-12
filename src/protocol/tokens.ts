@@ -62,28 +62,54 @@ export function linkFunders(c: Ctx, t: Tx, covenants: (string | null | undefined
   }
 }
 
-/** precop-style, but only exact proofs: every key in a marker transaction that rebuilds a coin's covenant (for that
- *  coin's token) proves its owner — a Taproot input or output key (the wallet is that Taproot address) or a full
- *  public key in a witness (the wallet is its P2WPKH address). A bare 32-byte witness item is never assumed to be a wallet. */
-export function linkTxKeys(c: Ctx, t: Tx) {
-  const created = all<{ owner_address: string; tick: string }>(c.db,
-    "SELECT DISTINCT s.owner_address, s.tick FROM seals s LEFT JOIN covenant_owners o ON o.covenant_address = s.owner_address WHERE s.txid = ? AND o.covenant_address IS NULL", t.txid);
-  if (!created.length) return;
-  const keys = new Map<string, string>();                     // x-only key -> wallet address
-  const taproot = (spk?: string, addr?: string) => { if (spk && addr && spk.length === 68 && spk.startsWith("5120")) keys.set(spk.slice(4), addr); };
+/* ── KEY BOOK: proven owners without the website ───────────────────────────────────────────────────────────────────────
+ * A covenant is a one-way hash of (owner key, token contract): no one can turn a covenant back into a wallet, but anyone
+ * can check a candidate. So every wallet key that appears in a CRC-20 transaction — a Taproot input or output key (the
+ * wallet is that Taproot address) or a full public key in a witness (the wallet is its P2WPKH address) — goes into the
+ * key book, with its covenant for EVERY token derived once. A coin whose covenant is in the book has a proven owner, even
+ * for a token that wallet never touched before (it minted BONS, later received BCAT: both are named). A bare 32-byte
+ * witness item is never assumed to be a wallet. None of this is consensus: it only names owners. */
+const tokenContracts = (c: Ctx): [string, string][] =>
+  [[TICK, BONS_CMR], ...all<{ tick: string; cmr: string }>(c.db, "SELECT tick, cmr FROM deploy WHERE cmr IS NOT NULL").map((r) => [r.tick, r.cmr] as [string, string])];
+
+function nameIfHeld(c: Ctx, covenant: string, xonly: string, wallet: string) {
+  if (getCovenantOwner(c.db, covenant)) return;
+  if (one(c.db, "SELECT 1 FROM seals WHERE owner_address = ? LIMIT 1", covenant)) setCovenantOwner(c.db, covenant, wallet, xonly, "key-book");
+}
+function addKey(c: Ctx, xonly: string, wallet: string, height: number) {
+  if (one(c.db, "SELECT 1 FROM key_book WHERE xonly = ?", xonly)) return;
+  run(c.db, "INSERT INTO key_book(xonly, wallet, height) VALUES(?,?,?)", xonly, wallet, height);
+  for (const [tick, cmr] of tokenContracts(c)) {
+    let cov: string;
+    try { cov = deriveCovenant(xonly, cmr, c.btc).address; } catch { return; }       // not a valid key
+    run(c.db, "INSERT OR IGNORE INTO cov_book(covenant, xonly, tick) VALUES(?,?,?)", cov, xonly, tick);
+    nameIfHeld(c, cov, xonly, wallet);
+  }
+}
+/** A new token: every key already in the book gets its covenant for it too. */
+export function bookToken(c: Ctx, tick: string, cmr: string) {
+  for (const k of all<{ xonly: string; wallet: string }>(c.db, "SELECT xonly, wallet FROM key_book")) {
+    try {
+      const cov = deriveCovenant(k.xonly, cmr, c.btc).address;
+      run(c.db, "INSERT OR IGNORE INTO cov_book(covenant, xonly, tick) VALUES(?,?,?)", cov, k.xonly, tick);
+    } catch { /* not a valid key */ }
+  }
+}
+/** After a CRC-20 transaction: book its wallet keys, then name the owners of the coins it created. */
+export function linkTxKeys(c: Ctx, t: Tx, height: number) {
+  const taproot = (spk?: string, addr?: string) => { if (spk && addr && spk.length === 68 && spk.startsWith("5120")) addKey(c, spk.slice(4), addr, height); };
   for (const v of t.vin) taproot(v.prevout?.scriptpubkey, v.prevout?.scriptpubkey_address);
   for (const o of t.vout) taproot(o.scriptpubkey, o.scriptpubkey_address);
   for (const v of t.vin) for (const w of v.witness ?? []) {
     if (w.length === 66 && (w.startsWith("02") || w.startsWith("03"))) {
-      try { const a = bitcoin.payments.p2wpkh({ pubkey: Buffer.from(w, "hex"), network: c.btc }).address; if (a && !keys.has(w.slice(2))) keys.set(w.slice(2), a); } catch { /* not a key */ }
+      try { const a = bitcoin.payments.p2wpkh({ pubkey: Buffer.from(w, "hex"), network: c.btc }).address; if (a) addKey(c, w.slice(2), a, height); } catch { /* not a key */ }
     }
   }
-  for (const { owner_address, tick } of created) {
-    const cmr = tick === TICK ? BONS_CMR : deployOf(c, tick)?.cmr;
-    if (!cmr) continue;
-    for (const [k, wallet] of keys) {
-      try { if (deriveCovenant(k, cmr, c.btc).address === owner_address) { setCovenantOwner(c.db, owner_address, wallet, k, "tx-key"); break; } } catch { /* not a valid key */ }
-    }
+  for (const { owner_address } of all<{ owner_address: string }>(c.db,
+    "SELECT DISTINCT s.owner_address FROM seals s LEFT JOIN covenant_owners o ON o.covenant_address = s.owner_address WHERE s.txid = ? AND o.covenant_address IS NULL", t.txid)) {
+    const b = one<{ xonly: string }>(c.db, "SELECT xonly FROM cov_book WHERE covenant = ?", owner_address);
+    const w = b && one<{ wallet: string }>(c.db, "SELECT wallet FROM key_book WHERE xonly = ?", b.xonly);
+    if (b && w) setCovenantOwner(c.db, owner_address, w.wallet, b.xonly, "key-book");
   }
 }
 

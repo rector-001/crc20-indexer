@@ -32,6 +32,10 @@ Credentials come from Bitcoin Core's cookie file by default (`--cookie-file`, `-
 `--bitcoin-rpc-username/--bitcoin-rpc-password`, the same as ord. A pruned node works if it still holds every
 block from the first block on. How it works: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+`server` also watches the mempool (every `--mempool-seconds`, default 5), so balances show pending tokens in and
+out, and `POST /v1/transactions/simulate` judges a transaction on top of what is pending. On a rate-limited hosted
+node, pass `--mempool off`.
+
 ## How it is built
 
 ```
@@ -71,9 +75,12 @@ test/
 | --- | --- | --- |
 | mainnet | 968,367 → 971,141 (2,775 blocks, 8.6 min over a hosted RPC node) | **Identical** to the live ledger on every table that decides balances: 6,272 coins, 1,209 balances, 41 token deploys, 5,665 ledger events, 39 proof-of-burns, 1,267 BONS sales, and every supply and raise counter |
 | regtest | 1 → 1,131 (reference test suites, every live rule) | **Identical**; both fetch paths (verbosity 3, and raw blocks with the marker prefilter) give the same ledger hash |
+| regtest, live | build → sign → broadcast → confirm, then a reorg | 29 checks: the built PSBTs sign with a real key and confirm; pending balances, coins and transactions; simulation (including a transaction that would lose a coin); merge; and the event stream through a block and a dropped tip |
 
 Two informational tables are not compared:
 - **Proven covenant owners:** the live site also records owners from wallet connections, which is not chain data.
+  From the chain alone the indexer names 926 of the 956 covenants that hold tokens, all 926 the same as the live
+  site. The other 30 have only ever received tokens; their owners' keys have not appeared on chain yet.
 - **Rejected deploys from before block 969,186:** the live database started keeping that list there.
 
 ## Licence

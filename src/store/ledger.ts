@@ -34,6 +34,10 @@ export function openLedger(path: string): Db {
     CREATE INDEX IF NOT EXISTS deltas_height ON deltas(height);
     CREATE TABLE IF NOT EXISTS oracle (height INTEGER PRIMARY KEY, price_usd TEXT NOT NULL, samples INTEGER);
     CREATE TABLE IF NOT EXISTS covenant_owners (covenant_address TEXT PRIMARY KEY, wallet_address TEXT, owner_xonly TEXT, source TEXT);
+    -- KEY BOOK (owners, not consensus): every wallet key seen in a CRC-20 transaction, and that key's covenant for every
+    -- token — an exact derivation, so a coin landing on one of these covenants has a proven owner
+    CREATE TABLE IF NOT EXISTS key_book (xonly TEXT PRIMARY KEY, wallet TEXT NOT NULL, height INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS cov_book (covenant TEXT PRIMARY KEY, xonly TEXT NOT NULL, tick TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS bons_fills (txid TEXT PRIMARY KEY, height INTEGER NOT NULL, sats INTEGER NOT NULL, atoms TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS bons_fills_h ON bons_fills(height);
     CREATE TABLE IF NOT EXISTS pob_used (burn_txid TEXT PRIMARY KEY, tick TEXT NOT NULL, height INTEGER NOT NULL);
@@ -139,6 +143,8 @@ export function rewindTo(db: Db, fork: number) {
     }
     db.prepare("DELETE FROM seals WHERE height >= ?").run(fork);
     db.prepare("UPDATE seals SET status='active', spent_txid=NULL WHERE spent_txid IN (SELECT txid FROM deltas WHERE height >= ?)").run(fork);
+    db.prepare("DELETE FROM cov_book WHERE xonly IN (SELECT xonly FROM key_book WHERE height >= ?)").run(fork);
+    db.prepare("DELETE FROM key_book WHERE height >= ?").run(fork);
     for (const t of ["deltas", "blocks", "oracle", "deploy", "bons_fills", "pob_used", "other_deploys", "launch_refunds", "launch_payments"])
       db.prepare(`DELETE FROM ${t} WHERE height >= ?`).run(fork);
     db.prepare("DELETE FROM balances").run();

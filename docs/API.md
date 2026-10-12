@@ -11,7 +11,7 @@ honest nodes at the same height answer the same.
 
 | Implemented | Coming next |
 | --- | --- |
-| `/v1/status`, `/v1/rules`, `/v1/tokens`, `/v1/tokens/{tick}` (+ `/holders`, `/activity`), `/v1/addresses/{address}/` (`balances`, `coins` with signing data, `covenants`, `activity`, `protected-outputs`), `/v1/outputs/{outpoint}`, `POST /v1/outputs/check`, `/v1/transactions/{txid}`, `/v1/blocks/{height}`, `/v1/events`, and the ord-compatible routes | `?mempool=1` (pending in / out), `POST /v1/transactions/simulate`, `/v1/events/stream`, `/v1/tokens/{tick}/quote/mint`, the `/v1/build/*` PSBT builders, the UniSat-style aliases |
+| `/v1/status`, `/v1/rules`, `/v1/tokens`, `/v1/tokens/{tick}` (+ `/holders`, `/activity`), `/v1/addresses/{address}/` (`balances`, `coins` with signing data, `covenants`, `activity`, `protected-outputs`), `/v1/outputs/{outpoint}`, `POST /v1/outputs/check`, `/v1/transactions/{txid}` (pending ones too), `/v1/blocks/{height}`, `/v1/events`, the ord-compatible routes; pending (mempool) balances and coins, `POST /v1/transactions/simulate`, `GET /v1/events/stream`, `POST /v1/build/transfer`, `POST /v1/build/merge` | `/v1/tokens/{tick}/quote/mint`, `POST /v1/build/purchase`, batch sends in the builder, the UniSat-style aliases |
 
 `crc20 server --http-port 8640` keeps syncing and serves the API from a read-only connection, so an answer only
 ever reflects committed blocks.
@@ -24,7 +24,7 @@ ever reflects committed blocks.
 | Format | JSON; `Content-Type: application/json` |
 | Amounts | integer **atoms** as decimal strings, with `decimals` (8 for every token today). Never JSON numbers |
 | Heights | every response carries `indexed_height` and `indexed_hash`, the block it is true at |
-| Mempool | read endpoints take `?mempool=1`: confirmed state plus the effect of unconfirmed transactions, each marked `pending` |
+| Mempool | `balances` and `coins` add pending fields by default when the node watches the mempool; `?mempool=0` returns confirmed state only. `crc20 server --mempool off` turns watching off (use it on a rate-limited hosted node) |
 | Lists | newest first; `?limit=` (default 50, max 500) and `?cursor=` (opaque, from `next_cursor`; `null` = end) |
 | Errors | HTTP 4xx/5xx with `{"error":{"code":"…","message":"…"}}` |
 | CORS | open (`*`), no credentials; no API keys on a self-hosted node |
@@ -124,9 +124,12 @@ Every token balance of a wallet, the first call a wallet makes.
       "pending_in": "0", "pending_out": "5000000000", "available": "118450000000" } ],
   "indexed_height": 971040 }
 ```
-- **`available`:** confirmed, minus coins already spent by an unconfirmed transaction (with `mempool=1`, the
-  default here).
+- **`available`:** confirmed, minus coins already spent by an unconfirmed transaction.
 - **`pending_in`:** tokens arriving: transfers to you, purchases, and the change of your own send.
+- **`pending_out`:** confirmed coins an unconfirmed transaction spends, whether or not it carries a marker (a
+  spend without one is caught through Bitcoin Core's `gettxspendingprevout`).
+- The response also carries `mempool: { txs, updated_at }`. The pending figures come from running the same rules
+  over the pending CRC-20 transactions (parents first) on a rolled-back copy of the ledger.
 
 ### `GET /v1/addresses/{address}/coins`
 The coins a wallet uses to build a transfer. `?tick=` filters.
@@ -202,23 +205,35 @@ The indexer's verdict on a transaction: which rule settled it, what moved, or wh
 
 ### `POST /v1/transactions/simulate`
 **Before you sign or broadcast:** what this transaction would do if it confirmed next, computed by the same rules
-on top of the current state (mempool included). The single most useful call for a wallet. It shows the user
-exactly what moves, and refuses to let them sign a transaction that would lose tokens.
+on top of the current state, pending transactions included. The single most useful call for a wallet: it shows the
+user exactly what moves, and flags a transaction that would lose tokens.
 ```json
-{ "tx_hex": "0200…", "prevouts": [ { "value": 330, "script_pubkey": "5120…" } ] }
+{ "tx_hex": "0200…" }        or        { "psbt_base64": "cHNidP8…" }
 ```
-`prevouts` is optional: the node looks them up if it can. Unsigned transactions are fine; a PSBT can be sent as
-`psbt_base64` instead.
+Signed or unsigned. Prevouts come from the PSBT's `witnessUtxo`, then the ledger's own coins, then Bitcoin Core
+(`gettxout`). An unsigned covenant input is checked with the leaf its PSBT `tapLeafScript` will reveal.
 
-Response: the same shape as `GET /v1/transactions/{txid}`, plus `warnings`:
-- `coin_spent_without_marker`: a token coin is an input, but no CRC-20 marker moves it, so its tokens would be
-  lost.
-- `marker_tick_differs_from_coin`
-- `receiver_not_330`
-- `change_missing`
-- `receiver_is_not_a_covenant`: tokens sent to a plain wallet address cannot be spent by a normal signer.
-- `fee_too_low`
+Response:
+```json
+{ "txid": "…", "rule": "transfer", "valid": true,
+  "spent":   [ { "outpoint": "…:1", "tick": "BONS", "amount": "…", "covenant": "bc1p…" } ],
+  "created": [ { "outpoint": "…:1", "tick": "BONS", "amount": "…", "covenant": "bc1p…", "kind": "seal" } ],
+  "events":  [ { "op": "transfer", "tick": "BONS", "from": "bc1p…", "to": "bc1p…", "amount": "…" } ],
+  "warnings": [], "on_top_of_pending": 0 }
+```
+- **`rule`:** `mint`, `launch_purchase`, `transfer`, `batch`, `merge`, or `none`.
+- **`valid: false`** when any of these warnings is present:
+  - `coin_lost`: an input is a token coin that no rule moves, so its tokens would be lost.
+  - `nothing_moved`: the transaction carries a marker that no rule accepts.
+- **Other warnings:**
+  - `no_marker`: a plain Bitcoin transaction that touches no coin.
+  - `unsigned`: signatures were not checked.
+- The price used for a mint is the last indexed block's BTC/USD; the real one is the confirming block's.
 
+### Pending transactions
+`GET /v1/transactions/{txid}` also answers for a pending CRC-20 transaction, with `pending: true` and the same
+`spent`/`created`/`events` as a simulation. `GET /v1/addresses/{address}/coins` adds `pending_spent_by` (txid or
+`null`) to each coin, and lists `arriving` coins.
 
 ## 5. Blocks and events (exchanges and explorers)
 
@@ -226,24 +241,44 @@ Response: the same shape as `GET /v1/transactions/{txid}`, plus `warnings`:
 | --- | --- |
 | `GET /v1/blocks/{height}` | every CRC-20 operation in that block, in order, plus its hash |
 | `GET /v1/events?from_height=&to_height=&tick=` | a flat ordered list of every balance change (one row per coin created / spent / burned) for following the ledger without per-address polling. Every row carries `height`, `block_hash`, `txid`, `index`, so a consumer can detect a reorg by hash and re-read |
-| `GET /v1/events/stream` | server-sent events of the same rows as blocks are indexed, and a `reorg` event with the fork height |
+| `GET /v1/events/stream?from_id=&tick=` | server-sent events, described below |
+
+### `GET /v1/events/stream`
+A `text/event-stream` connection. The events are:
+- `hello`: sent first, with `{indexed_height, indexed_hash, from_id}`.
+- `event`: one row of `/v1/events` as its block is indexed. The SSE `id` is the row's `index`.
+- `block`: `{height, hash}` after each block's rows.
+- `reorg`: `{fork_height}` when blocks are rolled back. Drop what you hold at or above that height; the rows are
+  sent again as the new blocks are indexed.
+- `pending`: `{txs}`, the pending CRC-20 transactions' effects, whenever the set changes.
+
+`?from_id=N` first replays every row after `N`, so a client that reconnects with its last id misses nothing.
+Without it, the stream starts at the current tip.
 
 ## 6. Builders (optional helpers)
 
 Unsigned PSBTs a wallet signs with its own key (`signPsbt` in UniSat, Xverse, OKX). They are conveniences: anyone
-can build the same transactions from the coin data above. The same code ships as a client library
-(`@crc20/kit`), so wallets need not call a server to build.
+can build the same transactions from the coin data above. The node never sees a key or a signature, and keeps no
+list of the wallet's BTC outputs, so the caller passes the outputs that pay the fee.
 
 | Endpoint | Builds |
 | --- | --- |
-| `POST /v1/build/transfer` | send tokens: `{ from, public_key?, tick, to: [{address, amount}], fee_rate, funding?: [outpoints] }`. One recipient → `transfer`; several coins → `batch`. The recipient's covenant is derived from their address |
-| `POST /v1/build/merge` | join several coins of one token into one |
-| `POST /v1/build/purchase` | a launch purchase paid in BTC (45/45/10 split or escrow) or in BONS (80/20) |
+| `POST /v1/build/transfer` | send tokens: `{ from, public_key?, tick, to, amount, fee_rate, funding: [{txid, vout, value}], change? }`. Spends the smallest single coin that covers `amount`. Output 0 is the marker, output 1 the recipient's coin, output 2 your change coin (when part stays), then BTC change. `to` is a Taproot wallet (its covenant is derived) or a covenant that already holds the token. If no single coin covers the amount, the answer is `409 merge_first` |
+| `POST /v1/build/merge` | join coins of one token into one: `{ from, public_key?, tick, fee_rate, funding, outpoints? }`. Up to 50 coins; all of them unless `outpoints` picks some. Only where the merge rule is active |
 
+Coins already spent by a pending transaction are never picked. A funding output that holds tokens is refused.
 Every builder answers with:
 ```json
-{ "psbt_base64": "…", "inputs_to_sign": [ { "index": 0, "address": "bc1p…", "sighash": 0 } ], "fee_sats": 412, "vsize": 206, "simulation": { /* POST /v1/transactions/simulate of the result */ } }
+{ "psbt_base64": "…",
+  "inputs_to_sign": [
+    { "index": 0, "address": "bc1p…", "publicKey": "…", "sighashTypes": [0], "useTweakedSigner": true, "useTweakSigner": true, "disableTweakSigner": false },
+    { "index": 1, "address": "bc1p…", "useTweakedSigner": true } ],
+  "fee_sats": 722, "vsize": 361, "fee_rate": 2,
+  "simulation": { /* POST /v1/transactions/simulate of the PSBT, on top of pending transactions */ } }
 ```
+A coin input is spent by script path and signed with the wallet's **tweaked** key, the address key the leaf holds.
+UniSat reads `useTweakedSigner`. OKX reads `useTweakSigner`; without it, OKX signs a tapleaf with the untweaked key
+and the signature is invalid. Pass `inputs_to_sign` straight to `signPsbt`'s `toSignInputs`.
 
 ## 7. Compatibility layer (optional)
 

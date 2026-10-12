@@ -18,6 +18,7 @@ import { openLedger, all, getCursor } from "./store/ledger.js";
 import { BitcoinRpc, defaultCookieFile, defaultRpcUrl } from "./index/fetcher.js";
 import { updateIndex } from "./index/updater.js";
 import { startApi } from "./api/server.js";
+import { Mempool } from "./api/live.js";
 import { PINNED } from "./protocol/pinned.js";
 import { DatabaseSync } from "node:sqlite";
 
@@ -88,8 +89,11 @@ async function main() {
       limit: flags["bitcoin-rpc-limit"] ? Number(flags["bitcoin-rpc-limit"]) : undefined });
     let tip: number | null = null;
     const port = Number(flags["http-port"] ?? 8640);
-    startApi(rc, { port, host: flags["http-host"] ?? "127.0.0.1", version: "0.1.0", chainTip: () => tip,
+    // pending (mempool) balances and simulations: on unless --mempool off (costly on a rate-limited hosted node)
+    const mempool = flags.mempool === "off" ? null : new Mempool(rpc, indexPath, net, (m) => console.error(m));
+    startApi(rc, { port, host: flags["http-host"] ?? "127.0.0.1", version: "0.1.0", chainTip: () => tip, dbPath: indexPath, rpc, mempool,
       pinned: Object.fromEntries((PINNED[network] ?? []).map((p) => [p.file, `sha256:${p.sha256}`])) });
+    if (mempool) (async () => { for (;;) { try { await mempool.refresh(); } catch (e) { console.error(`mempool: ${(e as Error).message}`); } await new Promise((r) => setTimeout(r, Number(flags["mempool-seconds"] ?? 5) * 1000)); } })();
     console.error(`crc20 ${chainArg}: API on http://${flags["http-host"] ?? "127.0.0.1"}:${port}/v1/status`);
     const fixedUsd = network === "regtest" ? (flags["regtest-oracle-usd"] ?? null) : null;
     const pinned = loadPinnedOracle(network);

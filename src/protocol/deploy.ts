@@ -7,7 +7,7 @@ import { tokenContract } from "./covenant.js";
 import { ONE, parseRate, targetSatsOfRate, usdMicrosPerBtc } from "./curve.js";
 import { TICK, type Ctx } from "./context.js";
 import type { Marker } from "./message.js";
-import { isDeployed, oldestUsableBurn } from "./tokens.js";
+import { bookToken, isDeployed, oldestUsableBurn } from "./tokens.js";
 import { lastOracleAtOrBelow } from "../store/ledger.js";
 import type { Tx } from "./types.js";
 
@@ -43,4 +43,5 @@ export function applyDeploy(c: Ctx, t: Tx, height: number, mk: Marker, btcUsd: s
     tick, "bonding", LAUNCH_SUPPLY, LAUNCH_SUPPLY, JSON.stringify({ btc: rateBtc.toString(), bons: rateBons.toString() }),
     t.txid, height, creator, targetUsd, pob.txid, tokenContract(tick, t.txid), targetSats.toString());
   run(c.db, "INSERT INTO pob_used(burn_txid,tick,height) VALUES(?,?,?)", pob.txid, tick, height);
+  bookToken(c, tick, tokenContract(tick, t.txid));          // every booked wallet's covenant for the new token (owners only)
 }

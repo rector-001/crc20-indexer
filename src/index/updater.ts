@@ -30,7 +30,7 @@ export function indexBlock(c: Ctx, b: FetchedBlock, oracle: OracleSource) {
     const btcUsd = oracleForHeight(c.db, h, b.txs, oracle);
     for (const t of b.txs) {
       applyTx(c, t, h, btcUsd);
-      if (markersOf(t).length) linkTxKeys(c, t);             // proven owners of the coins it created (not consensus)
+      if (markersOf(t).length) linkTxKeys(c, t, h);          // proven owners of the coins it created (not consensus)
     }
     putBlockHash(c.db, h, b.hash);
     setCursor(c.db, h + 1);
@@ -55,6 +55,15 @@ export async function updateIndex(c: Ctx, rpc: BitcoinRpc, oracle: OracleSource,
   let from = getCursor(c.db) ?? first;
   for (;;) {
     const tip = await rpc.getBlockCount();
+    // the node may have dropped our last block with no new block yet (a shorter or switched chain): roll back now, not
+    // when the next block arrives, so the API never serves a block the node no longer has
+    const last = getBlockHash(c.db, from - 1);
+    if (last !== null && (from - 1 > tip || (await rpc.getBlockHash(from - 1)) !== last)) {
+      const fork = await findFork(c.db, rpc, Math.min(from, tip + 1), maxDepth);
+      log(`reorg below ${from}: rolling back to ${fork}`);
+      rewindTo(c.db, fork);
+      from = fork;
+    }
     let inBatch = 0, reorgAt: number | null = null;
     c.db.exec("BEGIN");
     try {

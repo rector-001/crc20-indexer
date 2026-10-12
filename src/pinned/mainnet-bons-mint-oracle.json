@@ -1,0 +1,469 @@
+{
+ "network": "bitcoin",
+ "purpose": "BTC/USD per block used to price BONS mints (heights 968,368-968,444). Values as cached by the live mainnet indexer; samples=-1 means taken from crc.garden /api/oracle/btc-usd at the tip.",
+ "source": "crc20-mainnet ledger backup 2026-09-26T06:21:51Z, table oracle",
+ "rows": [
+  {
+   "height": 968368,
+   "price_usd": "84111",
+   "samples": -1,
+   "mint_block": false
+  },
+  {
+   "height": 968369,
+   "price_usd": "84104",
+   "samples": -1,
+   "mint_block": false
+  },
+  {
+   "height": 968370,
+   "price_usd": "84061",
+   "samples": -1,
+   "mint_block": false
+  },
+  {
+   "height": 968371,
+   "price_usd": "84061",
+   "samples": -1,
+   "mint_block": false
+  },
+  {
+   "height": 968372,
+   "price_usd": "84096",
+   "samples": -1,
+   "mint_block": false
+  },
+  {
+   "height": 968373,
+   "price_usd": "84116",
+   "samples": -1,
+   "mint_block": false
+  },
+  {
+   "height": 968374,
+   "price_usd": "84104",
+   "samples": -1,
+   "mint_block": false
+  },
+  {
+   "height": 968375,
+   "price_usd": "84080",
+   "samples": -1,
+   "mint_block": false
+  },
+  {
+   "height": 968376,
+   "price_usd": "83987",
+   "samples": -1,
+   "mint_block": false
+  },
+  {
+   "height": 968377,
+   "price_usd": "83987",
+   "samples": -1,
+   "mint_block": false
+  },
+  {
+   "height": 968378,
+   "price_usd": "83862",
+   "samples": -1,
+   "mint_block": false
+  },
+  {
+   "height": 968379,
+   "price_usd": "83625",
+   "samples": -1,
+   "mint_block": false
+  },
+  {
+   "height": 968380,
+   "price_usd": "83571",
+   "samples": -1,
+   "mint_block": false
+  },
+  {
+   "height": 968381,
+   "price_usd": "83507",
+   "samples": -1,
+   "mint_block": false
+  },
+  {
+   "height": 968382,
+   "price_usd": "83466",
+   "samples": -1,
+   "mint_block": false
+  },
+  {
+   "height": 968383,
+   "price_usd": "83194",
+   "samples": -1,
+   "mint_block": false
+  },
+  {
+   "height": 968384,
+   "price_usd": "83184",
+   "samples": -1,
+   "mint_block": false
+  },
+  {
+   "height": 968385,
+   "price_usd": "83138",
+   "samples": -1,
+   "mint_block": false
+  },
+  {
+   "height": 968386,
+   "price_usd": "83138",
+   "samples": -1,
+   "mint_block": false
+  },
+  {
+   "height": 968387,
+   "price_usd": "83125",
+   "samples": -1,
+   "mint_block": false
+  },
+  {
+   "height": 968388,
+   "price_usd": "83138",
+   "samples": -1,
+   "mint_block": false
+  },
+  {
+   "height": 968389,
+   "price_usd": "83178",
+   "samples": -1,
+   "mint_block": false
+  },
+  {
+   "height": 968390,
+   "price_usd": "83184",
+   "samples": -1,
+   "mint_block": false
+  },
+  {
+   "height": 968391,
+   "price_usd": "83208",
+   "samples": -1,
+   "mint_block": false
+  },
+  {
+   "height": 968392,
+   "price_usd": "83208",
+   "samples": -1,
+   "mint_block": false
+  },
+  {
+   "height": 968393,
+   "price_usd": "83245",
+   "samples": -1,
+   "mint_block": false
+  },
+  {
+   "height": 968394,
+   "price_usd": "83361",
+   "samples": -1,
+   "mint_block": false
+  },
+  {
+   "height": 968395,
+   "price_usd": "83387",
+   "samples": -1,
+   "mint_block": false
+  },
+  {
+   "height": 968396,
+   "price_usd": "83387",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968397,
+   "price_usd": "83455",
+   "samples": -1,
+   "mint_block": false
+  },
+  {
+   "height": 968398,
+   "price_usd": "83498",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968399,
+   "price_usd": "83498",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968400,
+   "price_usd": "83518",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968401,
+   "price_usd": "83696",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968402,
+   "price_usd": "83696",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968403,
+   "price_usd": "83836",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968404,
+   "price_usd": "83892",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968405,
+   "price_usd": "83892",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968406,
+   "price_usd": "84033",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968407,
+   "price_usd": "84033",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968408,
+   "price_usd": "84007",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968409,
+   "price_usd": "83801",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968410,
+   "price_usd": "83964",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968411,
+   "price_usd": "84189",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968412,
+   "price_usd": "83798",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968413,
+   "price_usd": "83738",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968414,
+   "price_usd": "83629",
+   "samples": -1,
+   "mint_block": false
+  },
+  {
+   "height": 968415,
+   "price_usd": "83629",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968416,
+   "price_usd": "83620",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968417,
+   "price_usd": "83737",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968418,
+   "price_usd": "83980",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968419,
+   "price_usd": "84021",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968420,
+   "price_usd": "84021",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968421,
+   "price_usd": "84038",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968422,
+   "price_usd": "84071",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968423,
+   "price_usd": "84149",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968424,
+   "price_usd": "84179",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968425,
+   "price_usd": "84179",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968426,
+   "price_usd": "84231",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968427,
+   "price_usd": "84209",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968428,
+   "price_usd": "84388",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968429,
+   "price_usd": "84388",
+   "samples": -1,
+   "mint_block": false
+  },
+  {
+   "height": 968430,
+   "price_usd": "84545",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968431,
+   "price_usd": "84545",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968432,
+   "price_usd": "84494",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968433,
+   "price_usd": "84284",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968434,
+   "price_usd": "84231",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968435,
+   "price_usd": "84231",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968436,
+   "price_usd": "84175",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968437,
+   "price_usd": "84175",
+   "samples": -1,
+   "mint_block": false
+  },
+  {
+   "height": 968438,
+   "price_usd": "84160",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968439,
+   "price_usd": "84160",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968440,
+   "price_usd": "84162",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968441,
+   "price_usd": "84151",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968442,
+   "price_usd": "84324",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968443,
+   "price_usd": "84328",
+   "samples": -1,
+   "mint_block": true
+  },
+  {
+   "height": 968444,
+   "price_usd": "84328",
+   "samples": -1,
+   "mint_block": true
+  }
+ ]
+}

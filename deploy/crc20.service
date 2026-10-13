@@ -1,0 +1,39 @@
+# systemd unit for a crc20-indexer API node. Install:
+#   sudo cp deploy/crc20.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now crc20
+# Logs: journalctl -u crc20 -f
+[Unit]
+Description=crc20-indexer (CRC-20 token indexer and API)
+After=network-online.target bitcoind.service
+Wants=network-online.target
+
+[Service]
+User=crc20
+Group=crc20
+# the user must be able to read Bitcoin Core's cookie file (add it to bitcoind's group, or set credentials below)
+ExecStart=/usr/bin/env crc20 --chain mainnet \
+  --bitcoin-data-dir /var/lib/bitcoind \
+  --data-dir /var/lib/crc20 \
+  server --http-host 127.0.0.1 --http-port 8640
+Environment=NODE_ENV=production
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=60
+StateDirectory=crc20
+
+# hardening
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/crc20
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+# MemoryDenyWriteExecute stays off: Node's JIT needs writable code pages
+
+[Install]
+WantedBy=multi-user.target

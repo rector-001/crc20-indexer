@@ -1,87 +1,78 @@
 # crc20-indexer
 
 An open-source indexer for **CRC-20 covenant tokens** on Bitcoin: **BONS** and every **BONS launchpad token**.
-It works like `ord` for runes and inscriptions. Run it next to a Bitcoin node, and it rebuilds the token ledger
-from the chain and serves a public API. Wallets, explorers and exchanges can support these tokens from that API
-alone.
+It works like [`ord`](https://github.com/ordinals/ord) does for runes and inscriptions. Run it next to a Bitcoin
+node, and it rebuilds the token ledger from the chain and serves a public API. Wallets, explorers and exchanges can
+support these tokens from that API alone.
 
-- **Deterministic:** two nodes at the same block give the same answer. The ledger depends only on Bitcoin and the
-  pinned data files shipped with each release (each with its sha256).
-- **No keys:** it never signs and never holds funds.
-- **Wallet-first API:** balances, token coins with everything a signer needs, protected outputs, transaction
-  simulation before signing, and unsigned-PSBT builders. See [docs/API.md](docs/API.md).
+- **Deterministic.** Two nodes at the same block give the same answer. The ledger depends only on Bitcoin and the
+  data files shipped with each release, each checked against its sha256.
+- **Only a Bitcoin node.** Bitcoin Core's RPC, from a fixed first block. No `-txindex`, no Esplora, no third-party
+  API.
+- **No keys.** It never signs and never holds funds.
+- **Wallet-first API.** Balances with pending amounts, coins with everything a signer needs, transaction
+  simulation before signing, unsigned PSBT builders, and a live event stream. See [docs/API.md](docs/API.md).
 - **MIT licensed.**
 
-Scope of this release: BONS and BONS launchpad tokens. Other CRC-20 families (LEAF, AXBT…) come later, each
-indexed by its own published rules.
+This release indexes BONS and BONS launchpad tokens. Other CRC-20 families (LEAF, AXBT…) come later, each by its
+own published rules.
 
-## Quick start (target)
+## Install
 
-All you need is your own Bitcoin Core node (version 25.0 or newer) with RPC enabled. No `-txindex`, no Esplora,
-no third-party API. The indexer starts at a fixed first block per chain (mainnet 968,367) and reads each block
-with `getblock <hash> 3`, which includes every input's previous output.
+You need **Node.js 22.5 or newer** and **Bitcoin Core 25.0 or newer** with RPC enabled.
 
 ```
-npm i -g crc20-indexer
-crc20 --chain mainnet index update                      # sync from the first block (resumable)
-crc20 --chain mainnet server --http-port 8640           # keep syncing + serve the API
-crc20 --chain mainnet index export --height 971000      # canonical ledger dump + hash, to compare two nodes
+git clone <repository-url> crc20-indexer
+cd crc20-indexer
+npm ci && npm run build
+npm link                     # puts `crc20` on your PATH
 ```
 
-Credentials come from Bitcoin Core's cookie file by default (`--cookie-file`, `--bitcoin-data-dir`), or
-`--bitcoin-rpc-username/--bitcoin-rpc-password`, the same as ord. A pruned node works if it still holds every
-block from the first block on. How it works: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+`npm ci` also tries to install `secp256k1`, Bitcoin Core's elliptic-curve library, prebuilt for Linux x64,
+macOS arm64 and Windows x64. It is optional. It makes owner linking about 7× faster, and without it the indexer
+uses a JavaScript implementation that gives the same results.
 
-`server` also watches the mempool (every `--mempool-seconds`, default 5), so balances show pending tokens in and
-out, and `POST /v1/transactions/simulate` judges a transaction on top of what is pending. On a rate-limited hosted
-node, pass `--mempool off`.
-
-## How it is built
+## Run
 
 ```
-src/
-  index/          updater.ts (block loop) · fetcher.ts (Bitcoin Core RPC, prefetch) · reorg.ts
-  protocol/       the rules, read only from the chain plus the published constants
-    message.ts      reading the OP_RETURN JSON
-    covenant.ts     contract leaf, covenant addresses, spend validation, burn sinks
-    curve.ts        BONS curve (two slopes) · bonding-token curve (exact area)
-    deploy.ts       a token and its terms
-    mint.ts         a mint, paid and priced by those terms
-    transfer.ts     transfer · batch · merge · burn
-    oracle.ts       BTC/USD: pinned values, then the chain-derived UTXOracle
-    constants/      PUBLISHED per network: curves, treasury / flywheel / holding / pre-burn
-                    addresses, activation heights — code, never environment
-  pinned/         data with sha256: BTC/USD for every height the reference ledger priced
-  store/          SQLite ledger + reorg rewind
-  api/            the /v1 JSON API + ord-compatible routes
-test/
-  vectors/        published test vectors: block + prevouts -> expected effects
-  golden/         replay against the reference ledgers (must match row for row)
+crc20 index update                       # sync mainnet from block 968,367 (resumable: Ctrl-C, run again)
+crc20 server                             # keep syncing and serve the API on 127.0.0.1:8640
+crc20 index export                       # the ledger's sha256, to compare with another node
+crc20 --help                             # every command and option
 ```
 
-## Correctness plan
+- **Credentials** come from Bitcoin Core's cookie file by default (`--bitcoin-data-dir`, `--cookie-file`), or
+  `--bitcoin-rpc-username` and `--bitcoin-rpc-password`, the same as ord.
+- **A pruned node works** if it still holds every block from the first block on.
+- **A hosted node** (a URL that carries its own key) needs `--no-auth`. Use `--bitcoin-rpc-limit 4` if it rate
+  limits, and `--mempool off` with `server`.
 
-1. **Port, do not rewrite.** The rules are taken line by line from the indexer live on mainnet since block
-   968,368 (`crc20-stack/src/indexer.mjs`). Every rule is in [docs/CONSENSUS-RULES.md](docs/CONSENSUS-RULES.md).
-2. **Golden replay.** Mainnet is rebuilt from scratch and must match the reference ledger exactly: coins,
-   balances, supply counters, deploys, proof-of-burn use.
-3. **Test vectors** come from the reference regtest suites, which hold over 1,100 checks.
-4. **Rule changes** are announced with an activation height, together with this repo's release, before they take
-   effect on mainnet.
+Running it as a service, tuning, and upgrades: [docs/RUNNING.md](docs/RUNNING.md). Adding CRC-20 to a wallet:
+[docs/WALLETS.md](docs/WALLETS.md).
+
+## Documentation
+
+| | |
+| --- | --- |
+| [docs/RUNNING.md](docs/RUNNING.md) | Operating a node: requirements, options, systemd, performance, upgrades |
+| [docs/WALLETS.md](docs/WALLETS.md) | Integrating a wallet: balances, sending, signing, simulation, live updates |
+| [docs/API.md](docs/API.md) | Every endpoint |
+| [docs/CONSENSUS-RULES.md](docs/CONSENSUS-RULES.md) | The rules, exactly |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How it works, and how it compares with ord |
 
 ## Verified
 
-| Chain | Blocks | Result |
-| --- | --- | --- |
-| mainnet | 968,367 → 971,141 (2,775 blocks, 8.6 min over a hosted RPC node) | **Identical** to the live ledger on every table that decides balances: 6,272 coins, 1,209 balances, 41 token deploys, 5,665 ledger events, 39 proof-of-burns, 1,267 BONS sales, and every supply and raise counter |
-| regtest | 1 → 1,131 (reference test suites, every live rule) | **Identical**; both fetch paths (verbosity 3, and raw blocks with the marker prefilter) give the same ledger hash |
-| regtest, live | build → sign → broadcast → confirm, then a reorg | 29 checks: the built PSBTs sign with a real key and confirm; pending balances, coins and transactions; simulation (including a transaction that would lose a coin); merge; and the event stream through a block and a dropped tip |
+| What | Result |
+| --- | --- |
+| **Mainnet replay**, blocks 968,367 → 971,141 (2,775 blocks), from scratch over a hosted RPC node | **Identical** to the live ledger on every consensus table: 6,272 coins, 1,209 balances, 41 token deploys, 5,665 ledger events, 39 proof-of-burns, 1,267 BONS sales, every supply and raise counter. 11.7 minutes, owner linking included |
+| **Owners named from the chain alone** (mainnet) | 946 of the 958 covenants that hold tokens, 0 disagreements with the live site. The other 12 belong to wallets that have not appeared on chain since the first block |
+| **Test suite** (`npm test`) | Unit tests on real mainnet vectors. A recorded regtest chain (every launch rule, transfers, merges, burns) replayed through a mock Bitcoin Core: both fetch modes reach the expected ledger hash, a stopped sync resumes to the same hash, and rollback to any height equals a fresh sync to that height |
+| **Live regtest** (`npm run test:e2e`) | Build → sign with a real key → broadcast → confirm, then a reorg. Pending balances, simulation (including a transaction that would lose a coin), merge, and the event stream |
 
-Two informational tables are not compared:
-- **Proven covenant owners:** the live site also records owners from wallet connections, which is not chain data.
-  From the chain alone the indexer names 926 of the 956 covenants that hold tokens, all 926 the same as the live
-  site. The other 30 have only ever received tokens; their owners' keys have not appeared on chain yet.
-- **Rejected deploys from before block 969,186:** the live database started keeping that list there.
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities privately as described in
+[SECURITY.md](SECURITY.md); do not open a public issue.
 
 ## Licence
 

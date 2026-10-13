@@ -67,7 +67,7 @@ Marker `{"p":"crc-20","op":"mint","tick":"BONS"}`; the token must be deployed.
 
 - **Capital:** the **sum** of every output other than the marker with value > 330 paid to `TREASURY_ADDRESS`.
   There is no per-transaction cap in consensus; the 150,000-sat cap is a builder limit, and overflow is refunded
-  off-chain by `scripts/mint-overflow-scan.mjs`.
+  off-chain by the minting site.
 - **Seal:** the first output other than the marker that is exactly 330 sat, `v1_p2tr`, and not a treasury
   output. Any address can receive it (gift mints are allowed).
 - **Price:** the BONS curve at this block's BTC/USD (§10):

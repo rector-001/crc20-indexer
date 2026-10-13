@@ -94,20 +94,25 @@ export class BitcoinRpc {
     catch (e) { if (e instanceof RpcError && e.code === -8) return null; throw e; }
   }
   getBlockHeader = (hash: string) => this.call<{ hash: string; height: number; previousblockhash?: string; time: number }>("getblockheader", [hash, true]);
-  async getBlock(hash: string): Promise<Block & { prev: string | null; time: number }> {
+  async getBlock(hash: string, keys = false): Promise<FetchedBlock> {
     const b = await this.call<CoreBlock>("getblock", [hash, 3]);
-    return { height: b.height, hash: b.hash, prev: b.previousblockhash ?? null, time: b.time, txs: b.tx.map(toTx) };
+    const txs = b.tx.map(toTx);
+    return { height: b.height, hash: b.hash, prev: b.previousblockhash ?? null, time: b.time, txs,
+      ...(keys ? { taprootKeys: taprootKeysOf(txs.flatMap((t) => t.vout.map((o) => o.scriptpubkey))) } : {}) };
   }
   /** LOOKUP MODE (for a remote node, where a verbosity-3 block is ~4x the bytes): the raw block, parsed here, and
    *  prevouts fetched only for the transactions that carry a CRC-20 marker — the only ones the rules read prevouts of. */
-  async getBlockLookup(hash: string, network: bitcoin.Network, height: number, opts: { rest?: string; needAll?: (h: number) => boolean } = {}): Promise<Block & { prev: string | null; time: number }> {
+  async getBlockLookup(hash: string, network: bitcoin.Network, height: number, opts: { rest?: string; needAll?: (h: number) => boolean; keys?: boolean } = {}): Promise<FetchedBlock> {
     const raw = opts.rest ? await restBlock(opts.rest, hash) : Buffer.from(await this.call<string>("getblock", [hash, 0]), "hex");
     // 80-byte header: version(4) prev(32) merkle(32) time(4) bits(4) nonce(4)
     const prev = Buffer.from(raw.subarray(4, 36)).reverse().toString("hex"), time = raw.readUInt32LE(68);
     /* PREFILTER: a block with no `"crc-20"` bytes holds no marker, so no rule touches it. When its BTC/USD is also
      * already known (pinned for every height up to a release), nothing in it is needed and it is not parsed at all. */
-    if (raw.indexOf(MARKER_BYTES) < 0 && !(opts.needAll?.(height) ?? true)) return { height, hash, prev, time, txs: [] };
+    const skip = raw.indexOf(MARKER_BYTES) < 0 && !(opts.needAll?.(height) ?? true);
+    if (skip && !opts.keys) return { height, hash, prev, time, txs: [] };
     const blk = bitcoin.Block.fromBuffer(raw);
+    const taprootKeys = opts.keys ? taprootKeysOf((blk.transactions ?? []).flatMap((t) => t.outs.map((o) => o.script))) : undefined;
+    if (skip) return { height, hash, prev, time, txs: [], taprootKeys };
     const txs = (blk.transactions ?? []).map((t, i) => rawToTx(t, i === 0));
     const need = txs.filter((t) => markersOf(t).length > 0);
     // addresses only where the rules read them: the outputs of transactions that carry a marker
@@ -117,7 +122,7 @@ export class BitcoinRpc {
       const full = await this.batch<CoreTx>(chunk.map((t) => ({ method: "getrawtransaction", params: [t.txid, 2, hash] })));
       chunk.forEach((t, j) => { const f = full[j]!; t.vin.forEach((v, k) => { const p = f.vin[k]?.prevout; if (p) v.prevout = toOut(p); }); });
     }
-    return { height, hash, prev, time, txs };
+    return { height, hash, prev, time, txs, taprootKeys };
   }
   getRawMempool = () => this.call<string[]>("getrawmempool");
   /** a mempool (or, with -txindex, any) transaction, its prevouts included (verbosity 2) — null when unknown */
@@ -209,7 +214,16 @@ function rawToTx(t: bitcoin.Transaction, coinbase: boolean): Tx {
 
 /* ── block fetcher: runs ahead of the indexer, bounded, with retries ───────────────────────────────────────────────── */
 
-export interface FetchedBlock extends Block { prev: string | null; time: number }
+/** `taprootKeys`: every distinct Taproot output key in the block (all transactions), for owner linking — not consensus */
+export interface FetchedBlock extends Block { prev: string | null; time: number; taprootKeys?: string[] }
+const taprootKeysOf = (scripts: Iterable<Uint8Array | string>): string[] => {
+  const keys = new Set<string>();
+  for (const s of scripts) {
+    if (typeof s === "string") { if (s.length === 68 && s.startsWith("5120")) keys.add(s.slice(4)); }
+    else if (s.length === 34 && s[0] === 0x51 && s[1] === 0x20) keys.add(Buffer.from(s.subarray(2)).toString("hex"));
+  }
+  return [...keys];
+};
 
 /** Blocks from `from` up to the tip (or `limit`), in order. Like ord: up to `ahead` blocks are fetched before they are
  *  consumed; a failing call retries after 1, 2, 4 … s and gives up beyond 120 s. Below `firstBlock` only the header is
@@ -222,6 +236,8 @@ export interface FetchOptions {
   rest?: string;
   /** must every transaction of block h be parsed (its BTC/USD is not known yet)? */
   needAll?: (h: number) => boolean;
+  /** also list every block's Taproot output keys (owner linking) */
+  keys?: boolean;
 }
 export async function* fetchBlocks(rpc: BitcoinRpc, from: number, opts: FetchOptions): AsyncGenerator<FetchedBlock> {
   const ahead = opts.ahead ?? 32;
@@ -234,15 +250,20 @@ export async function* fetchBlocks(rpc: BitcoinRpc, from: number, opts: FetchOpt
       const hd = await rpc.getBlockHeader(hash);
       return { height: h, hash, prev: hd.previousblockhash ?? null, time: hd.time, txs: [] };
     }
-    return opts.lookup ? rpc.getBlockLookup(hash, opts.lookup, h, { rest: opts.rest, needAll: opts.needAll }) : rpc.getBlock(hash);
+    return opts.lookup ? rpc.getBlockLookup(hash, opts.lookup, h, { rest: opts.rest, needAll: opts.needAll, keys: opts.keys }) : rpc.getBlock(hash, opts.keys);
   }, opts.log, h).catch((e) => { throw e; });
   const fill = () => { while (queue.length < ahead && (opts.limit === undefined || next < opts.limit)) queue.push(one(next++)); };
   fill();
-  while (queue.length) {
-    const b = await queue.shift()!;
-    if (!b) return;                                   // reached the tip
-    yield b;
-    fill();
+  try {
+    while (queue.length) {
+      const b = await queue.shift()!;
+      if (!b) return;                                 // reached the tip
+      yield b;
+      fill();
+    }
+  } finally {
+    // blocks fetched ahead and never consumed (tip reached, a reorg, or a stop): their results, or failures, are dropped
+    for (const p of queue) p.catch(() => {});
   }
 }
 

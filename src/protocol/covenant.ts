@@ -5,8 +5,10 @@
 //   internal key:         BIP-341 NUMS point (no key path)
 //   one covenant address per (owner, token contract)
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 import * as bitcoin from "bitcoinjs-lib";
 import ecc from "@bitcoinerlab/secp256k1";
+import { secp256k1 } from "@noble/curves/secp256k1";
 
 bitcoin.initEccLib(ecc);
 const { payments, script: bscript, opcodes } = bitcoin;
@@ -35,6 +37,32 @@ export function deriveCovenant(ownerXonlyHex: string, cmrHex: string, network: b
   const p = payments.p2tr({ internalPubkey: NUMS, network, scriptTree: { output: leaf } });
   return { address: p.address!, scriptHex: Buffer.from(p.output!).toString("hex"), leafScriptHex: leaf.toString("hex"),
            cmrHex, ownerXOnlyPublicKeyHex: toXOnly(Buffer.from(ownerXonlyHex, "hex")).toString("hex") };
+}
+
+/* FAST OUTPUT KEY: only the 32-byte Taproot output key of the covenant (its address without the encoding), for checking
+ * many candidate keys against a few covenants. Q = NUMS + H_TapTweak(NUMS || H_TapLeaf(0xc0 || len || leaf))·G, with the
+ * leaf's owner key spliced in place; the same value deriveCovenant encodes. One fixed-base multiplication per call. */
+const tagged = (t: string) => { const h = createHash("sha256").update(t, "utf8").digest(); return Buffer.concat([h, h]); };
+const TAP_LEAF = tagged("TapLeaf"), TAP_TWEAK = tagged("TapTweak");
+const NUMS_POINT = secp256k1.ProjectivePoint.fromHex("02" + NUMS_HEX), NUMS_EVEN = Buffer.from("02" + NUMS_HEX, "hex");
+/* The point addition runs in libsecp256k1 (Bitcoin Core's library, the optional `secp256k1` package, prebuilt for the
+ * common platforms) when it loads — about 7x faster — and in pure JavaScript otherwise. Both give the same key; the
+ * test suite checks that. */
+type Native = { publicKeyTweakAdd(pub: Uint8Array, tweak: Uint8Array, compressed?: boolean): Uint8Array };
+let native: Native | null = null;
+try { native = createRequire(import.meta.url)("secp256k1") as Native; native.publicKeyTweakAdd(NUMS_EVEN, Buffer.alloc(32, 1), true); }
+catch { native = null; }
+export const curveBackend = (): "libsecp256k1" | "javascript" => (native ? "libsecp256k1" : "javascript");
+const tweakOf = (ownerXonly: Buffer, cmr: Buffer): Buffer => {
+  // leaf = 0x20 <cmr> 0x75 0x20 <owner> 0xac  (68 bytes)
+  const leaf = Buffer.concat([TAP_LEAF, Buffer.from([0xc0, 68, 0x20]), cmr, Buffer.from([0x75, 0x20]), ownerXonly, Buffer.from([0xac])]);
+  const leafHash = createHash("sha256").update(leaf).digest();
+  return createHash("sha256").update(Buffer.concat([TAP_TWEAK, NUMS, leafHash])).digest();
+};
+export function covenantOutputKey(ownerXonly: Buffer, cmr: Buffer, useNative = true): string {
+  const t = tweakOf(ownerXonly, cmr);
+  if (native && useNative) return Buffer.from(native.publicKeyTweakAdd(NUMS_EVEN, t, true)).subarray(1).toString("hex");
+  return NUMS_POINT.add(secp256k1.ProjectivePoint.BASE.multiply(BigInt("0x" + t.toString("hex")))).toAffine().x.toString(16).padStart(64, "0");
 }
 
 /** The control block that spends `leaf` of a single-leaf covenant (what a wallet puts in tapLeafScript). */

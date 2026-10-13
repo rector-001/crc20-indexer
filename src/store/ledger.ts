@@ -139,7 +139,10 @@ export function rewindTo(db: Db, fork: number) {
       const [kind, tick] = r.op.split(":") as [string, string];
       const key = kind === "burn" ? `burned_atoms:${tick}` : `raise:${tick}`;
       const next = BigInt(getMeta(db, key, "0")!) - BigInt(r.s ?? 0);
-      setMeta(db, key, next < 0n ? 0n : next);
+      // a counter none of the kept blocks touched did not exist yet: remove it (a fresh sync would not have it)
+      const kept = db.prepare("SELECT 1 FROM deltas WHERE height < ? AND op = ? LIMIT 1").get(fork, r.op);
+      if (!kept && next <= 0n) db.prepare("DELETE FROM meta WHERE k = ?").run(key);
+      else setMeta(db, key, next < 0n ? 0n : next);
     }
     db.prepare("DELETE FROM seals WHERE height >= ?").run(fork);
     db.prepare("UPDATE seals SET status='active', spent_txid=NULL WHERE spent_txid IN (SELECT txid FROM deltas WHERE height >= ?)").run(fork);
@@ -147,8 +150,14 @@ export function rewindTo(db: Db, fork: number) {
     db.prepare("DELETE FROM key_book WHERE height >= ?").run(fork);
     for (const t of ["deltas", "blocks", "oracle", "deploy", "bons_fills", "pob_used", "other_deploys", "launch_refunds", "launch_payments"])
       db.prepare(`DELETE FROM ${t} WHERE height >= ?`).run(fork);
+    // event ids continue from the last kept event, exactly as on a node that never saw the dropped blocks
+    db.prepare("UPDATE sqlite_sequence SET seq = (SELECT COALESCE(MAX(id), 0) FROM deltas) WHERE name = 'deltas'").run();
+    // balances, as a sync to this height leaves them: a row for every (token, owner) ever credited — kept at 0 once
+    // spent, as forward indexing keeps it — holding the sum of that owner's active coins
     db.prepare("DELETE FROM balances").run();
+    db.prepare("INSERT INTO balances(tick, address, atoms) SELECT DISTINCT tick, owner_address, '0' FROM seals").run();
     for (const s of db.prepare("SELECT tick, owner_address, amount_atoms FROM seals WHERE status='active'").all() as unknown as Seal[]) credit(db, s.owner_address, BigInt(s.amount_atoms), s.tick);
+    db.prepare("DELETE FROM meta WHERE k LIKE 'minted_atoms:%' OR k LIKE 'opening_minted_atoms:%'").run();
     const minted: Record<string, bigint> = {}, opening: Record<string, bigint> = {};
     for (const s of db.prepare("SELECT tick, amount_atoms, bucket FROM seals WHERE kind='allocation' AND status != 'voided'").all() as unknown as Seal[]) {
       minted[s.tick] = (minted[s.tick] ?? 0n) + BigInt(s.amount_atoms);

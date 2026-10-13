@@ -3,7 +3,7 @@
 // src/launchpad.mjs (contract, price, proof-of-burn and status sections).
 import * as bitcoin from "bitcoinjs-lib";
 import { all, one, run, setCovenantOwner, getCovenantOwner } from "../store/ledger.js";
-import { BONS_CMR, LAUNCH_SUPPLY, covenantOfWallet, deriveCovenant, ownerKeyFromAddress } from "./covenant.js";
+import { BONS_CMR, LAUNCH_SUPPLY, covenantOfWallet, covenantOutputKey, deriveCovenant, ownerKeyFromAddress } from "./covenant.js";
 import { ONE, curveParams, usdMicrosPerBtc } from "./curve.js";
 import { TICK, type Ctx } from "./context.js";
 import type { Tx } from "./types.js";
@@ -72,6 +72,9 @@ export function linkFunders(c: Ctx, t: Tx, covenants: (string | null | undefined
 const tokenContracts = (c: Ctx): [string, string][] =>
   [[TICK, BONS_CMR], ...all<{ tick: string; cmr: string }>(c.db, "SELECT tick, cmr FROM deploy WHERE cmr IS NOT NULL").map((r) => [r.tick, r.cmr] as [string, string])];
 
+/** a covenant's address from its owner key — deriveCovenant's address, by the fast path */
+const covAddress = (c: Ctx, owner: Buffer, cmr: Buffer | string) =>
+  bitcoin.address.toBech32(Buffer.from(covenantOutputKey(owner, typeof cmr === "string" ? Buffer.from(cmr, "hex") : cmr), "hex"), 1, c.btc.bech32);
 function nameIfHeld(c: Ctx, covenant: string, xonly: string, wallet: string) {
   if (getCovenantOwner(c.db, covenant)) return;
   if (one(c.db, "SELECT 1 FROM seals WHERE owner_address = ? LIMIT 1", covenant)) setCovenantOwner(c.db, covenant, wallet, xonly, "key-book");
@@ -79,9 +82,9 @@ function nameIfHeld(c: Ctx, covenant: string, xonly: string, wallet: string) {
 function addKey(c: Ctx, xonly: string, wallet: string, height: number) {
   if (one(c.db, "SELECT 1 FROM key_book WHERE xonly = ?", xonly)) return;
   run(c.db, "INSERT INTO key_book(xonly, wallet, height) VALUES(?,?,?)", xonly, wallet, height);
+  const kb = Buffer.from(xonly, "hex");
   for (const [tick, cmr] of tokenContracts(c)) {
-    let cov: string;
-    try { cov = deriveCovenant(xonly, cmr, c.btc).address; } catch { return; }       // not a valid key
+    const cov = covAddress(c, kb, cmr);
     run(c.db, "INSERT OR IGNORE INTO cov_book(covenant, xonly, tick) VALUES(?,?,?)", cov, xonly, tick);
     nameIfHeld(c, cov, xonly, wallet);
   }
@@ -89,10 +92,8 @@ function addKey(c: Ctx, xonly: string, wallet: string, height: number) {
 /** A new token: every key already in the book gets its covenant for it too. */
 export function bookToken(c: Ctx, tick: string, cmr: string) {
   for (const k of all<{ xonly: string; wallet: string }>(c.db, "SELECT xonly, wallet FROM key_book")) {
-    try {
-      const cov = deriveCovenant(k.xonly, cmr, c.btc).address;
-      run(c.db, "INSERT OR IGNORE INTO cov_book(covenant, xonly, tick) VALUES(?,?,?)", cov, k.xonly, tick);
-    } catch { /* not a valid key */ }
+    const cov = covAddress(c, Buffer.from(k.xonly, "hex"), Buffer.from(cmr, "hex"));
+    run(c.db, "INSERT OR IGNORE INTO cov_book(covenant, xonly, tick) VALUES(?,?,?)", cov, k.xonly, tick);
   }
 }
 /** After a CRC-20 transaction: book its wallet keys, then name the owners of the coins it created. */
@@ -112,6 +113,78 @@ export function linkTxKeys(c: Ctx, t: Tx, height: number) {
     if (b && w) setCovenantOwner(c.db, owner_address, w.wallet, b.xonly, "key-book");
   }
 }
+
+/* ── OWNER KEYS ANYWHERE ON CHAIN: the covenants no CRC-20 transaction has named yet ──────────────────────────────────
+ * A coin sent to a wallet that never touched CRC-20 has an owner the rules never see. But that wallet's key is its
+ * Taproot output key, and it shows up the moment the wallet receives any bitcoin. So, after each block: every Taproot
+ * output key in the block (all transactions, not only CRC-20 ones) is checked against the covenants that hold coins and
+ * have no owner yet. Forward only — a key counts in the block its covenant first holds coins or any later block — so no
+ * history of keys is kept, and every node that reads the same blocks names the same owners. A match is a proof (the
+ * covenant is a hash of that key), and the key then enters the key book, which names its covenants of every other
+ * token. Cost: one fixed-base multiplication per (new key, token with unnamed holders). Not consensus. */
+interface Watch { dirty: boolean; byTick: Map<string, { cmr: Buffer; outKeys: Map<string, string> }>; tried: Map<string, string> }
+const watches = new WeakMap<Ctx, Watch>();
+/** counters for `--link-keys` cost (logged by the updater) */
+export const linkStats = { blocks: 0, keys: 0, derived: 0, cached: 0, ticks: 0, ms: 0 };
+const TRIED_MAX = 2_000_000;           // (key, token) pairs remembered: ~2M × ~150 bytes
+function watchOf(c: Ctx): Watch {
+  let w = watches.get(c);
+  if (!w) { w = { dirty: true, byTick: new Map(), tried: new Map() }; watches.set(c, w); }
+  if (w.dirty) {
+    const sinks = new Set(c.sinks), contracts = new Map(tokenContracts(c));
+    w.byTick.clear();
+    for (const r of all<{ owner_address: string; tick: string }>(c.db,
+      "SELECT DISTINCT s.owner_address, s.tick FROM seals s LEFT JOIN covenant_owners o ON o.covenant_address = s.owner_address WHERE s.status = 'active' AND o.covenant_address IS NULL")) {
+      if (sinks.has(r.owner_address) || !contracts.has(r.tick)) continue;
+      let out: string;
+      try { out = Buffer.from(bitcoin.address.fromBech32(r.owner_address).data).toString("hex"); } catch { continue; }
+      const t = w.byTick.get(r.tick) ?? { cmr: Buffer.from(contracts.get(r.tick)!, "hex"), outKeys: new Map() };
+      t.outKeys.set(out, r.owner_address); w.byTick.set(r.tick, t);
+    }
+    w.dirty = false;
+  }
+  return w;
+}
+/** The burn chain is public: each sink is owned by the one before it (the burn covenant by the burn address). */
+function nameSinks(c: Ctx) {
+  for (let i = 1; i < c.sinks.length; i++) {
+    if (getCovenantOwner(c.db, c.sinks[i]!) || !one(c.db, "SELECT 1 FROM seals WHERE owner_address = ? LIMIT 1", c.sinks[i]!)) continue;
+    const parent = c.sinks[i - 1]!;
+    setCovenantOwner(c.db, c.sinks[i]!, parent, Buffer.from(bitcoin.address.fromBech32(parent).data).toString("hex"), "burn-sink");
+  }
+}
+export function linkBlockKeys(c: Ctx, taprootKeys: string[], height: number, blockHadMarkers: boolean) {
+  const w = watches.get(c);
+  if (blockHadMarkers || !w) { nameSinks(c); if (w) w.dirty = true; }
+  const watch = watchOf(c);
+  linkStats.blocks++;
+  if (!watch.byTick.size) return;
+  const t0 = performance.now();
+  linkStats.keys += taprootKeys.length; linkStats.ticks += watch.byTick.size;
+  let named = false;
+  for (const key of taprootKeys) {
+    const kb = Buffer.from(key, "hex");
+    for (const [tick, t] of watch.byTick) {
+      const id = key + tick;
+      let out = watch.tried.get(id);
+      if (out === undefined) {
+        out = covenantOutputKey(kb, t.cmr); linkStats.derived++;
+        if (watch.tried.size >= TRIED_MAX) watch.tried.clear();
+        watch.tried.set(id, out);
+      } else linkStats.cached++;
+      const cov = t.outKeys.get(out);
+      if (!cov || getCovenantOwner(c.db, cov)) continue;
+      const wallet = bitcoin.address.toBech32(kb, 1, c.btc.bech32);
+      setCovenantOwner(c.db, cov, wallet, key, "chain-key");
+      addKey(c, key, wallet, height);            // its covenants of every other token, named as they hold coins
+      named = true;
+    }
+  }
+  if (named) watch.dirty = true;
+  linkStats.ms += performance.now() - t0;
+}
+/** After a reorg the watch list is rebuilt from the ledger. */
+export function resetKeyWatch(c: Ctx) { const w = watches.get(c); if (w) w.dirty = true; }
 
 /* ── BONS price from sales read off the chain (micro-sats per whole BONS) ─────────────────────────────────────────── */
 

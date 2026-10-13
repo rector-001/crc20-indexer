@@ -4,19 +4,47 @@
   "description": "Open-source indexer and public API for CRC-20 covenant tokens on Bitcoin (BONS and BONS launchpad tokens)",
   "license": "MIT",
   "type": "module",
-  "engines": { "node": ">=22.5" },
-  "bin": { "crc20": "dist/cli.js" },
+  "engines": {
+    "node": ">=22.5"
+  },
+  "bin": {
+    "crc20": "dist/bin.js"
+  },
   "scripts": {
     "build": "tsc -p .",
-    "test": "node --test --experimental-strip-types test/**/*.test.ts",
-    "typecheck": "tsc -p . --noEmit"
+    "test": "npm run build && node --test \"test/*.test.mjs\"",
+    "test:e2e": "node test/e2e/live-regtest.mjs",
+    "typecheck": "tsc -p . --noEmit",
+    "prepublishOnly": "npm test"
   },
   "dependencies": {
     "@bitcoinerlab/secp256k1": "^1.1.1",
+    "@noble/curves": "^1.9.7",
     "bitcoinjs-lib": "^6.1.6"
   },
   "devDependencies": {
     "@types/node": "^22.7.0",
     "typescript": "^5.6.0"
-  }
+  },
+  "optionalDependencies": {
+    "secp256k1": "^5.0.2"
+  },
+  "keywords": [
+    "bitcoin",
+    "crc-20",
+    "indexer",
+    "taproot",
+    "covenant",
+    "tokens",
+    "ord"
+  ],
+  "files": [
+    "dist",
+    "docs",
+    "deploy",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "SECURITY.md"
+  ]
 }

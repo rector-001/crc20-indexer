@@ -64,7 +64,7 @@ const COMMANDS: { name: string; summary: string; flags: Flag[]; about: string }[
 function usage(cmd?: (typeof COMMANDS)[number]): string {
   const fmt = (fl: Flag[]) => fl.map((f) => `  --${f.name}${f.arg ? ` <${f.arg}>` : ""}`.padEnd(34) + f.help).join("\n");
   if (cmd) return `crc20 ${cmd.name}: ${cmd.summary}\n\n${cmd.about}\n\nUsage: crc20 [OPTIONS] ${cmd.name} [COMMAND OPTIONS]\n\nCommand options:\n${fmt(cmd.flags)}\n\nOptions:\n${fmt(GLOBAL)}\n`;
-  return `crc20 ${VERSION}: an open-source indexer and API for CRC-20 tokens on Bitcoin\n\nUsage: crc20 [OPTIONS] <COMMAND>\n\nCommands:\n${COMMANDS.map((c) => `  ${c.name.padEnd(16)}${c.summary}`).join("\n")}\n\nOptions:\n${fmt(GLOBAL)}\n\nRun \`crc20 <COMMAND> --help\` for a command's options. Docs: the docs/ folder of the source.\n`;
+  return `crc20 ${VERSION}: an open-source indexer and API for CRC-20 tokens on Bitcoin\n\nUsage: crc20 [OPTIONS] <COMMAND>\n\nCommands:\n${COMMANDS.map((c) => `  ${c.name.padEnd(16)}${c.summary}`).join("\n")}\n\nOptions:\n${fmt(GLOBAL)}\n\nRun \`crc20 <COMMAND> --help\` for a command's options. Docs: https://github.com/rector-001/crc20-indexer\n`;
 }
 
 class UsageError extends Error {}

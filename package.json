@@ -46,5 +46,13 @@
     "LICENSE",
     "CHANGELOG.md",
     "SECURITY.md"
-  ]
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rector-001/crc20-indexer.git"
+  },
+  "homepage": "https://github.com/rector-001/crc20-indexer#readme",
+  "bugs": {
+    "url": "https://github.com/rector-001/crc20-indexer/issues"
+  }
 }

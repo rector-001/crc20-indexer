@@ -14,15 +14,21 @@ support these tokens from that API alone.
   simulation before signing, unsigned PSBT builders, and a live event stream. See [docs/API.md](docs/API.md).
 - **MIT licensed.**
 
-This release indexes BONS and BONS launchpad tokens. Other CRC-20 families (LEAF, AXBT…) come later, each by its
-own published rules.
+## Status
+
+| | |
+| --- | --- |
+| **BONS** | Supported |
+| **BONS launchpad tokens** | Supported |
+| **LEAF and other CRC-20 tokens** | Full support coming soon, each indexed by its own published rules |
+| **precop-indexer** | A patch so [precop-indexer](https://github.com/Laz1mov/precop-indexer) fully indexes BONS and BONS launchpad tokens will be published soon |
 
 ## Install
 
 You need **Node.js 22.5 or newer** and **Bitcoin Core 25.0 or newer** with RPC enabled.
 
 ```
-git clone <repository-url> crc20-indexer
+git clone https://github.com/rector-001/crc20-indexer
 cd crc20-indexer
 npm ci && npm run build
 npm link                     # puts `crc20` on your PATH

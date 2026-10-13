@@ -23,9 +23,17 @@ support these tokens from that API alone.
 | **LEAF and other CRC-20 tokens** | Full support coming soon, each indexed by its own published rules |
 | **precop-indexer** | A patch so [precop-indexer](https://github.com/Laz1mov/precop-indexer) fully indexes BONS and BONS launchpad tokens will be published soon |
 
-## Install
+## How to run
 
-You need **Node.js 22.5 or newer** and **Bitcoin Core 25.0 or newer** with RPC enabled.
+**1. Bitcoin Core.** Version 25.0 or newer, fully synced, with RPC on. In `bitcoin.conf`:
+
+```
+server=1
+```
+
+No `-txindex` is needed. A pruned node works if it still holds every block from 968,367 on.
+
+**2. Install.** You need Node.js 22.5 or newer.
 
 ```
 git clone https://github.com/rector-001/crc20-indexer
@@ -38,23 +46,37 @@ npm link                     # puts `crc20` on your PATH
 macOS arm64 and Windows x64. It is optional. It makes owner linking about 7× faster, and without it the indexer
 uses a JavaScript implementation that gives the same results.
 
-## Run
+**3. Sync.** Reads every block from 968,367 to the tip, then exits. Stop it any time with Ctrl-C; the next run
+continues where it stopped.
 
 ```
-crc20 index update                       # sync mainnet from block 968,367 (resumable: Ctrl-C, run again)
-crc20 server                             # keep syncing and serve the API on 127.0.0.1:8640
-crc20 index export                       # the ledger's sha256, to compare with another node
-crc20 --help                             # every command and option
+crc20 index update
 ```
 
+**4. Serve the API.** Keeps following the tip and serves the API on `127.0.0.1:8640`.
+
+```
+crc20 server
+```
+
+**5. Check it.**
+
+```
+curl -s 127.0.0.1:8640/v1/status                     # indexed height, chain tip, synced
+curl -s 127.0.0.1:8640/v1/tokens                     # every token
+curl -s 127.0.0.1:8640/v1/addresses/<bc1p…>/balances # a wallet's balances
+crc20 index export                                   # the ledger's sha256, to compare with another node
+```
+
+**Connecting to Bitcoin Core:**
 - **Credentials** come from Bitcoin Core's cookie file by default (`--bitcoin-data-dir`, `--cookie-file`), or
   `--bitcoin-rpc-username` and `--bitcoin-rpc-password`, the same as ord.
-- **A pruned node works** if it still holds every block from the first block on.
-- **A hosted node** (a URL that carries its own key) needs `--no-auth`. Use `--bitcoin-rpc-limit 4` if it rate
-  limits, and `--mempool off` with `server`.
+- **A node on another machine:** `--bitcoin-rpc-url http://host:8332`.
+- **A hosted node** (a URL that carries its own key): add `--no-auth`. If it rate-limits, add
+  `--bitcoin-rpc-limit 4`, and `--mempool off` with `server`.
 
-Running it as a service, tuning, and upgrades: [docs/RUNNING.md](docs/RUNNING.md). Adding CRC-20 to a wallet:
-[docs/WALLETS.md](docs/WALLETS.md).
+`crc20 --help` lists every command and option. Running it as a service, tuning and upgrades are in
+[docs/RUNNING.md](docs/RUNNING.md). Adding CRC-20 to a wallet is in [docs/WALLETS.md](docs/WALLETS.md).
 
 ## Documentation
 

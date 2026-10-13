@@ -68,12 +68,20 @@ curl -s 127.0.0.1:8640/v1/addresses/<bc1p…>/balances # a wallet's balances
 crc20 index export                                   # the ledger's sha256, to compare with another node
 ```
 
-**Connecting to Bitcoin Core:**
-- **Credentials** come from Bitcoin Core's cookie file by default (`--bitcoin-data-dir`, `--cookie-file`), or
-  `--bitcoin-rpc-username` and `--bitcoin-rpc-password`, the same as ord.
-- **A node on another machine:** `--bitcoin-rpc-url http://host:8332`.
-- **A hosted node** (a URL that carries its own key): add `--no-auth`. If it rate-limits, add
-  `--bitcoin-rpc-limit 4`, and `--mempool off` with `server`.
+**Connecting to Bitcoin Core.** Same as ord. By default the indexer reads Bitcoin Core's cookie file, so on the
+same machine there is nothing to set. Otherwise:
+
+| | |
+| --- | --- |
+| Username and password | `--bitcoin-rpc-username crc20 --bitcoin-rpc-password …` |
+| Bitcoin Core elsewhere | `--bitcoin-rpc-url http://192.168.1.20:8332` (with a username and password) |
+| Everything in the URL | `--bitcoin-rpc-url http://user:password@host:8332` |
+| A hosted node with a key in its URL | `--bitcoin-rpc-url https://provider.example/<key> --no-auth`, plus `--bitcoin-rpc-limit 4` and `--mempool off` if it rate-limits |
+| Data not in the default place | `--bitcoin-data-dir /path/to/bitcoin` or `--cookie-file /path/.cookie` |
+
+Every option can also be an environment variable (`CRC20_BITCOIN_RPC_URL`, `CRC20_BITCOIN_RPC_PASSWORD`, …) or
+a line in `~/.crc20/crc20.yaml` (`bitcoin_rpc_url: http://127.0.0.1:8332`). An option wins over the environment,
+which wins over the file. Details: [docs/RUNNING.md](docs/RUNNING.md#connecting-to-bitcoin-core).
 
 `crc20 --help` lists every command and option. Running it as a service, tuning and upgrades are in
 [docs/RUNNING.md](docs/RUNNING.md). Adding CRC-20 to a wallet is in [docs/WALLETS.md](docs/WALLETS.md).

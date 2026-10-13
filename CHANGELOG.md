@@ -17,6 +17,14 @@ The first public release. **Rebuild:** not applicable (new index).
 - Owners of covenants named from the chain alone, including from Taproot keys in any transaction
   (`--link-keys`). Optional native libsecp256k1 for speed.
 
+### Connecting to Bitcoin Core (as in ord)
+- Credentials: the cookie file (default, re-read when Bitcoin Core restarts), `--bitcoin-rpc-username` with
+  `--bitcoin-rpc-password`, credentials in the URL (`http://user:pass@host:port`), or none (`--no-auth`).
+  `http://` may be left out of the URL.
+- Every option can also be a `CRC20_<NAME>` environment variable or a line in `crc20.yaml` (`--config`,
+  `--config-dir`, default `~/.crc20/crc20.yaml`). An option wins over the environment, which wins over the file.
+- Clear errors for an unreadable cookie, an unreachable node, refused credentials (401) and `rpcallowip` (403).
+
 ### API
 - `/v1`: tokens, holders, activity, wallet balances (with pending amounts), coins with signing data, covenants,
   outputs, transactions (pending ones too), blocks, events, and the ord-compatible routes.

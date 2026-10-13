@@ -9,6 +9,52 @@
 | Disk | The index is about 50 MB at block 971,141 and grows with CRC-20 activity, not with the chain |
 | Memory | About 600 MB during the initial sync |
 
+## Connecting to Bitcoin Core
+
+The indexer only needs Bitcoin Core's RPC. Choose credentials the way ord does, in this order:
+
+| Way | Use it when | How |
+| --- | --- | --- |
+| **Cookie file** (the default) | the indexer runs on the same machine as Bitcoin Core | nothing to set. It reads `<bitcoin-data-dir>/.cookie` (`<bitcoin-data-dir>/regtest/.cookie` on regtest). Set `--bitcoin-data-dir` if Bitcoin Core's data is not in the default place, or `--cookie-file` for the file itself |
+| **Username and password** | `rpcuser`/`rpcpassword` or `rpcauth` in `bitcoin.conf` | `--bitcoin-rpc-username` and `--bitcoin-rpc-password`, always together |
+| **In the URL** | one setting for everything | `--bitcoin-rpc-url http://user:password@host:8332` |
+| **No credentials** | a hosted node whose URL carries its own access key | `--bitcoin-rpc-url https://provider.example/<key>` and `--no-auth` |
+
+- **The URL** defaults to `http://127.0.0.1:8332` (regtest `:18443`). `http://` may be left out, as in ord:
+  `--bitcoin-rpc-url 192.168.1.20:8332`.
+- **Bitcoin Core on another machine** must allow it: `rpcbind=` and `rpcallowip=` in its `bitcoin.conf`, and use
+  a username and password, because the cookie only works locally.
+- **The cookie changes every time Bitcoin Core restarts.** A running `crc20 server` reads it again by itself, so
+  there is nothing to restart.
+
+Errors say what went wrong and what to try: the cookie file can't be read, Bitcoin Core can't be reached at the
+URL, it refused the credentials (HTTP 401), or it refused this machine (HTTP 403, `rpcallowip`).
+
+### Settings: options, environment, or a file
+
+Every option can be given three ways. As in ord, an option wins over the environment, which wins over the file,
+which wins over the default.
+
+1. **An option:** `--bitcoin-rpc-url http://127.0.0.1:8332`
+2. **An environment variable:** `CRC20_` and the option's name in capitals, with `_` for `-`.
+   `CRC20_BITCOIN_RPC_URL`, `CRC20_BITCOIN_RPC_USERNAME`, `CRC20_BITCOIN_RPC_PASSWORD`, `CRC20_COOKIE_FILE`,
+   `CRC20_BITCOIN_DATA_DIR`, `CRC20_NO_AUTH=true`, `CRC20_CHAIN`, `CRC20_DATA_DIR`, `CRC20_HTTP_PORT`, and so on.
+3. **A settings file**, `crc20.yaml`: one `name: value` per line. The file is read from `~/.crc20/crc20.yaml`,
+   from `--config-dir <dir>`, or from `--config <file>`. A file passed with `--config` must exist; one in the
+   default place may be missing.
+
+```yaml
+# ~/.crc20/crc20.yaml (deploy/crc20.yaml.example has every setting)
+bitcoin_rpc_url: http://127.0.0.1:8332
+bitcoin_rpc_username: crc20
+bitcoin_rpc_password: change-me
+http_port: 8640
+```
+
+Keep passwords out of shell history: put them in the file (readable only by the service user, `chmod 600`) or
+in the environment. A misspelt variable (`CRC20_BITCOIN_RCP_URL`) or setting is an error, never silently
+ignored.
+
 ## Options
 
 `crc20 --help` and `crc20 <command> --help` list them all.
@@ -21,6 +67,7 @@
 | `--cookie-file` | `<bitcoin-data-dir>/.cookie` | |
 | `--bitcoin-rpc-username`, `--bitcoin-rpc-password` | | instead of the cookie |
 | `--no-auth` | | a hosted node whose URL carries its own key |
+| `--config`, `--config-dir` | `~/.crc20/crc20.yaml` | the settings file |
 | `--bitcoin-rpc-limit` | 12 | RPC requests in flight |
 | `--data-dir` | `~/.crc20/<chain>` | |
 | `--index` | `<data-dir>/index.sqlite` | |
@@ -56,6 +103,9 @@ http://127.0.0.1:8332` (start `bitcoind` with `-rest=1`). If the native `secp256
 ## Running as a service
 
 `deploy/crc20.service` is a systemd unit with the usual hardening.
+
+Settings go in `/etc/crc20/crc20.env` (environment variables) or in a `crc20.yaml`; the unit reads the first if
+it exists.
 
 ```
 sudo useradd --system --home /var/lib/crc20 crc20

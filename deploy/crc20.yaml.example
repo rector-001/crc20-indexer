@@ -1,0 +1,30 @@
+# crc20.yaml: every setting, with its default. One "name: value" per line; names may use _ or -.
+# Copy to ~/.crc20/crc20.yaml (or pass --config FILE). An option on the command line wins over an
+# environment variable (CRC20_<NAME>), which wins over this file. Keep it chmod 600 if it holds a password.
+
+# chain: mainnet                        # mainnet | regtest
+
+# ── Bitcoin Core ──
+# bitcoin_rpc_url: http://127.0.0.1:8332    # http:// may be left out; http://user:pass@host:port also works
+# bitcoin_data_dir: ~/.bitcoin              # where the cookie file is
+# cookie_file: /home/bitcoin/.bitcoin/.cookie
+# bitcoin_rpc_username: crc20               # with bitcoin_rpc_password, instead of the cookie
+# bitcoin_rpc_password: "change-me"       # quote a value that contains #
+# no_auth: false                            # true for a hosted URL that carries its own key
+# bitcoin_rpc_limit: 12                     # requests in flight; 4 for a rate-limited hosted node
+
+# ── the index ──
+# data_dir: ~/.crc20/mainnet
+# index: /var/lib/crc20/index.sqlite
+# prevouts: lookup                          # lookup | block (getblock verbosity 3, a local node)
+# bitcoin_rest_url: http://127.0.0.1:8332   # raw blocks over Core's REST interface (bitcoind -rest=1)
+# prefetch: 32
+# commit_interval: 1000
+# link_keys: on                             # on | off: owner linking from Taproot keys (not consensus)
+
+# ── crc20 server ──
+# http_host: 127.0.0.1
+# http_port: 8640
+# poll_seconds: 10
+# mempool: on                               # on | off (off on a rate-limited hosted node)
+# mempool_seconds: 5

@@ -32,6 +32,8 @@ const GLOBAL: Flag[] = [
   { name: "index", arg: "FILE", help: "Index file [default: <data-dir>/index.sqlite]" },
   { name: "regtest-addresses", arg: "FILE", help: "regtest only: JSON of the protocol addresses a test suite created" },
   { name: "regtest-oracle-usd", arg: "USD", number: true, help: "regtest only: a fixed BTC/USD for every block" },
+  { name: "config", arg: "FILE", help: "Settings file [default: <config-dir>/crc20.yaml]" },
+  { name: "config-dir", arg: "DIR", help: "Where crc20.yaml is [default: ~/.crc20]" },
   { name: "help", boolean: true, help: "Print help" },
   { name: "version", boolean: true, help: "Print version" },
 ];
@@ -64,10 +66,81 @@ const COMMANDS: { name: string; summary: string; flags: Flag[]; about: string }[
 function usage(cmd?: (typeof COMMANDS)[number]): string {
   const fmt = (fl: Flag[]) => fl.map((f) => `  --${f.name}${f.arg ? ` <${f.arg}>` : ""}`.padEnd(34) + f.help).join("\n");
   if (cmd) return `crc20 ${cmd.name}: ${cmd.summary}\n\n${cmd.about}\n\nUsage: crc20 [OPTIONS] ${cmd.name} [COMMAND OPTIONS]\n\nCommand options:\n${fmt(cmd.flags)}\n\nOptions:\n${fmt(GLOBAL)}\n`;
-  return `crc20 ${VERSION}: an open-source indexer and API for CRC-20 tokens on Bitcoin\n\nUsage: crc20 [OPTIONS] <COMMAND>\n\nCommands:\n${COMMANDS.map((c) => `  ${c.name.padEnd(16)}${c.summary}`).join("\n")}\n\nOptions:\n${fmt(GLOBAL)}\n\nRun \`crc20 <COMMAND> --help\` for a command's options. Docs: https://github.com/rector-001/crc20-indexer\n`;
+  return `crc20 ${VERSION}: an open-source indexer and API for CRC-20 tokens on Bitcoin\n\nUsage: crc20 [OPTIONS] <COMMAND>\n\nCommands:\n${COMMANDS.map((c) => `  ${c.name.padEnd(16)}${c.summary}`).join("\n")}\n\nOptions:\n${fmt(GLOBAL)}\n\nEvery option can also be set as an environment variable, CRC20_<NAME> (e.g. CRC20_BITCOIN_RPC_URL), or as\n\`name: value\` in crc20.yaml. An option wins over the environment, which wins over the file.\n\nRun \`crc20 <COMMAND> --help\` for a command's options. Docs: https://github.com/rector-001/crc20-indexer\n`;
 }
 
 class UsageError extends Error {}
+const ALL_FLAGS = (): Flag[] => [...GLOBAL, ...SYNC, ...SERVER, ...EXPORT];
+/** One setting's value, checked the same way wherever it came from (`where` names the source in errors). */
+function checked(def: Flag, val: string, where: string): string {
+  if (def.values && !def.values.includes(val)) throw new UsageError(`${where} must be one of: ${def.values.join(", ")}`);
+  if (def.number && !(Number.isFinite(Number(val)) && Number(val) >= 0)) throw new UsageError(`${where} must be a number`);
+  return val;
+}
+const truthy = (v: string, where: string): boolean => {
+  if (/^(1|true|yes|on)$/i.test(v)) return true;
+  if (/^(0|false|no|off|)$/i.test(v)) return false;
+  throw new UsageError(`${where} must be true or false`);
+};
+
+/* SETTINGS, the way ord layers them: a command-line option wins over an environment variable (CRC20_<NAME>, e.g.
+ * CRC20_BITCOIN_RPC_URL), which wins over the settings file (crc20.yaml), which wins over the default. */
+function fromEnv(env: NodeJS.ProcessEnv): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(env)) {
+    if (!k.startsWith("CRC20_") || v === undefined) continue;
+    const name = k.slice(6).toLowerCase().replace(/_/g, "-");
+    const def = ALL_FLAGS().find((f) => f.name === name);
+    if (!def || name === "help" || name === "version") throw new UsageError(`unknown environment variable ${k}`);
+    if (def.boolean) { if (truthy(v, k)) out[name] = "1"; }
+    else out[name] = checked(def, v, k);
+  }
+  return out;
+}
+/** crc20.yaml: one `name: value` per line (names as the options, with - or _), # comments. */
+function fromFile(file: string, required: boolean): Record<string, string> {
+  let text: string;
+  try { text = readFileSync(file, "utf8"); }
+  catch (e) { if (!required && (e as NodeJS.ErrnoException).code === "ENOENT") return {}; throw new UsageError(`cannot read settings file ${file}: ${(e as Error).message}`); }
+  const out: Record<string, string> = {};
+  text.split(/\r?\n/).forEach((line, i) => {
+    const t = line.trim();
+    if (!t || t.startsWith("#")) return;
+    const m = /^([A-Za-z0-9_-]+)\s*:\s*(.*)$/.exec(t);
+    if (!m) throw new UsageError(`${file}:${i + 1}: expected "name: value"`);
+    // a quoted value may hold "#"; an unquoted one ends at " #"
+    const q = /^(["'])(.*?)\1\s*(#.*)?$/.exec(m[2]!);
+    const raw = q ? q[2]! : m[2]!.replace(/\s+#.*$/, "").trim();
+    const name = m[1]!.toLowerCase().replace(/_/g, "-");
+    const def = ALL_FLAGS().find((f) => f.name === name);
+    if (!def || ["help", "version", "config", "config-dir"].includes(name)) throw new UsageError(`${file}:${i + 1}: unknown setting ${m[1]}`);
+    if (def.boolean) { if (truthy(raw, `${file}:${i + 1}: ${m[1]}`)) out[name] = "1"; }
+    else out[name] = checked(def, raw, `${file}:${i + 1}: ${m[1]}`);
+  });
+  return out;
+}
+export function settings(cli: Record<string, string>, env: NodeJS.ProcessEnv): Record<string, string> {
+  const e = fromEnv(env);
+  const explicit = cli.config ?? e.config;
+  const dir = cli["config-dir"] ?? e["config-dir"] ?? "~/.crc20";
+  const merged = { ...fromFile(home(explicit) ?? join(home(dir)!, "crc20.yaml"), explicit !== undefined), ...e, ...cli };
+  for (const k of PATHS) if (merged[k] !== undefined) merged[k] = home(merged[k])!;
+  return merged;
+}
+/** `~/x` → the home directory's x (a shell does this for options, but not for a settings file or the environment) */
+const home = (p: string | undefined) => (p === "~" ? homedir() : p?.startsWith("~/") ? join(homedir(), p.slice(2)) : p);
+const PATHS = ["bitcoin-data-dir", "cookie-file", "data-dir", "index", "config", "config-dir", "regtest-addresses", "out"];
+
+/** The Bitcoin Core client: credentials chosen as ord chooses them (see BitcoinRpc). */
+export function bitcoinRpc(flags: Record<string, string>, chain: string): BitcoinRpc {
+  return new BitcoinRpc({
+    url: flags["bitcoin-rpc-url"] ?? defaultRpcUrl(chain),
+    username: flags["bitcoin-rpc-username"], password: flags["bitcoin-rpc-password"],
+    cookieFile: flags["no-auth"] ? undefined : (flags["cookie-file"] ?? defaultCookieFile(chain, flags["bitcoin-data-dir"])),
+    limit: flags["bitcoin-rpc-limit"] ? Number(flags["bitcoin-rpc-limit"]) : undefined,
+  });
+}
+
 function parse(argv: string[]) {
   const flags: Record<string, string> = {}, rest: string[] = [];
   for (let i = 0; i < argv.length; i++) {
@@ -82,9 +155,7 @@ function parse(argv: string[]) {
       if (def.boolean) { flags[k] = "1"; continue; }
       const val = v ?? argv[++i];
       if (val === undefined || val.startsWith("--")) throw new UsageError(`--${k} needs a value <${def.arg}>`);
-      if (def.values && !def.values.includes(val)) throw new UsageError(`--${k} must be one of: ${def.values.join(", ")}`);
-      if (def.number && !(Number.isFinite(Number(val)) && Number(val) >= 0)) throw new UsageError(`--${k} must be a number`);
-      flags[k] = val;
+      flags[k] = checked(def, val, `--${k}`);
     } else rest.push(a);
   }
   return { flags, rest };
@@ -93,7 +164,8 @@ function parse(argv: string[]) {
 const CHAIN: Record<string, NetworkName> = { mainnet: "bitcoin", bitcoin: "bitcoin", regtest: "regtest" };
 
 async function main() {
-  const { flags, rest } = parse(process.argv.slice(2));
+  const { flags: cli, rest } = parse(process.argv.slice(2));
+  const flags = cli.help || cli.version ? cli : settings(cli, process.env);
   if (flags.version) { console.log(`crc20 ${VERSION}`); return; }
   const cmd = COMMANDS.find((c) => c.name === rest.join(" "));
   if (flags.help || !cmd) {
@@ -103,7 +175,8 @@ async function main() {
     return;
   }
   const allowed = new Set([...GLOBAL, ...cmd.flags].map((f) => f.name));
-  for (const k of Object.keys(flags)) if (!allowed.has(k)) throw new UsageError(`--${k} does not apply to '${cmd.name}'`);
+  // only what was typed is checked against the command; a settings file or the environment may hold more
+  for (const k of Object.keys(cli)) if (!allowed.has(k)) throw new UsageError(`--${k} does not apply to '${cmd.name}'`);
   const chainArg = flags.chain ?? "mainnet", network = CHAIN[chainArg];
   if (!network) throw new UsageError(`unknown chain ${chainArg}`);
   // regtest only: a test suite makes fresh wallets each run, so their addresses (and a fixed BTC/USD) are passed in
@@ -116,10 +189,7 @@ async function main() {
   const c = makeCtx(db, net);
 
   if (rest[0] === "index" && rest[1] === "update") {
-    const rpc = new BitcoinRpc({ url: flags["bitcoin-rpc-url"] ?? defaultRpcUrl(chainArg),
-      username: flags["bitcoin-rpc-username"], password: flags["bitcoin-rpc-password"],
-      cookieFile: flags["bitcoin-rpc-username"] || flags["no-auth"] !== undefined ? undefined : (flags["cookie-file"] ?? defaultCookieFile(chainArg, flags["bitcoin-data-dir"])),
-      limit: flags["bitcoin-rpc-limit"] ? Number(flags["bitcoin-rpc-limit"]) : undefined });
+    const rpc = bitcoinRpc(flags, chainArg);
     await rpc.checkVersion();
     let stop = false;
     process.on("SIGINT", () => { stop = true; console.error("stopping after this block…"); });
@@ -139,10 +209,7 @@ async function main() {
     const indexPath = flags.index ?? join(dataDir, "index.sqlite");
     const reader = new DatabaseSync(indexPath, { readOnly: true });
     const rc = makeCtx(reader, net);
-    const rpc = new BitcoinRpc({ url: flags["bitcoin-rpc-url"] ?? defaultRpcUrl(chainArg),
-      username: flags["bitcoin-rpc-username"], password: flags["bitcoin-rpc-password"],
-      cookieFile: flags["bitcoin-rpc-username"] || flags["no-auth"] !== undefined ? undefined : (flags["cookie-file"] ?? defaultCookieFile(chainArg, flags["bitcoin-data-dir"])),
-      limit: flags["bitcoin-rpc-limit"] ? Number(flags["bitcoin-rpc-limit"]) : undefined });
+    const rpc = bitcoinRpc(flags, chainArg);
     let tip: number | null = null;
     const port = Number(flags["http-port"] ?? 8640);
     // pending (mempool) balances and simulations: on unless --mempool off (costly on a rate-limited hosted node)

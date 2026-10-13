@@ -31,16 +31,53 @@ export const defaultRpcUrl = (chain: string): string => `http://127.0.0.1:${DEFA
 
 export class RpcError extends Error { constructor(public code: number, message: string) { super(message); } }
 
+/** A cookie file Bitcoin Core wrote (`__cookie__:<password>`), or a clear error saying how else to connect. */
+export function readCookie(file: string): { user: string; pass: string } {
+  let text: string;
+  try { text = readFileSync(file, "utf8").trim(); }
+  catch (e) {
+    throw new RpcError(-1, `cannot read Bitcoin Core's cookie file ${file} (${(e as NodeJS.ErrnoException).code ?? (e as Error).message}). ` +
+      "Is bitcoind running, and can this user read its data directory? Point --bitcoin-data-dir or --cookie-file at it, " +
+      "or pass --bitcoin-rpc-username and --bitcoin-rpc-password, or --no-auth for a URL that carries its own key.");
+  }
+  const i = text.indexOf(":");
+  if (i < 0) throw new RpcError(-1, `${file} is not a Bitcoin Core cookie file (expected user:password)`);
+  return { user: text.slice(0, i), pass: text.slice(i + 1) };
+}
+
+/** `127.0.0.1:8332` → `http://127.0.0.1:8332`; credentials in the URL (`http://user:pass@host`) are taken out of it. */
+export function parseRpcUrl(raw: string): { url: string; username?: string; password?: string } {
+  let u: URL;
+  try { u = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `http://${raw}`); }
+  catch { throw new RpcError(-1, `--bitcoin-rpc-url ${raw} is not a URL`); }
+  const username = u.username ? decodeURIComponent(u.username) : undefined, password = u.password ? decodeURIComponent(u.password) : undefined;
+  u.username = ""; u.password = "";
+  return { url: u.toString().replace(/\/$/, (m) => (raw.endsWith("/") ? m : "")), username, password };
+}
+
 export class BitcoinRpc {
   private auth: string;
+  private url: string;
   private id = 0;
   private active = 0;
   private waiting: (() => void)[] = [];
+  /**
+   * Credentials, as ord chooses them: an explicit username and password; else ones written in the URL; else the
+   * cookie file; else none (a hosted endpoint whose URL carries its own access key). With a cookie, a 401 re-reads
+   * the file once: Bitcoin Core writes a new cookie every time it restarts.
+   */
   constructor(private o: RpcOptions) {
-    let user = o.username, pass = o.password;
-    if (!user && o.cookieFile) [user, pass] = readFileSync(o.cookieFile, "utf8").trim().split(":") as [string, string];
-    // no credentials at all (a hosted endpoint whose URL carries its own access token): send no Authorization header
-    this.auth = user === undefined ? "" : "Basic " + Buffer.from(`${user}:${pass ?? ""}`).toString("base64");
+    const p = parseRpcUrl(o.url);
+    this.url = p.url;
+    if ((o.username === undefined) !== (o.password === undefined)) throw new RpcError(-1, o.username === undefined ? "no Bitcoin RPC username given (--bitcoin-rpc-username)" : "no Bitcoin RPC password given (--bitcoin-rpc-password)");
+    this.auth = this.credentials(p);
+  }
+  private credentials(p = parseRpcUrl(this.o.url)): string {
+    const basic = (user: string, pass: string) => "Basic " + Buffer.from(`${user}:${pass}`).toString("base64");
+    if (this.o.username !== undefined) return basic(this.o.username, this.o.password ?? "");
+    if (p.username !== undefined) return basic(p.username, p.password ?? "");
+    if (this.o.cookieFile) { const c = readCookie(this.o.cookieFile); return basic(c.user, c.pass); }
+    return "";
   }
 
   private async slot<T>(fn: () => Promise<T>): Promise<T> {
@@ -55,17 +92,39 @@ export class BitcoinRpc {
     } finally { this.active--; this.waiting.shift()?.(); }
   }
 
+  /** One HTTP POST to Bitcoin Core: auth, a re-read cookie after a restart, rate limits and plain errors. */
+  private async post(body: unknown): Promise<unknown> {
+    for (let attempt = 0; ; attempt++) {
+      let r: Response;
+      try {
+        r = await fetch(this.url, {
+          method: "POST", headers: { "content-type": "application/json", ...(this.auth ? { authorization: this.auth } : {}) },
+          body: JSON.stringify(body), signal: AbortSignal.timeout(this.o.timeoutMs ?? 120_000),
+        });
+      } catch (e) {
+        // fetch wraps the socket error, sometimes in an AggregateError (one per address tried)
+        type Cause = { code?: string; message?: string; errors?: Cause[] };
+        const c = (e as { cause?: Cause }).cause;
+        const cause = c?.code ?? c?.errors?.find((x) => x.code)?.code ?? c?.message ?? (e as Error).message;
+        throw new RpcError(-1, `cannot reach Bitcoin Core at ${this.url} (${cause})`);
+      }
+      if (r.status === 401) {
+        if (attempt === 0 && this.o.cookieFile && this.o.username === undefined) { this.auth = this.credentials(); continue; }
+        throw new RpcError(-1, `Bitcoin Core at ${this.url} refused the RPC credentials (HTTP 401): check the cookie file, or --bitcoin-rpc-username and --bitcoin-rpc-password`);
+      }
+      if (r.status === 403) throw new RpcError(-1, `Bitcoin Core at ${this.url} refused this client (HTTP 403): allow it with -rpcallowip`);
+      if (r.status === 429) throw new RpcError(429, "rate limited");
+      const j = await r.json().catch(() => null);
+      if (j === null) throw new RpcError(-1, `bad RPC response from ${this.url} (HTTP ${r.status})`);
+      return j;
+    }
+  }
+
   /** Several calls in one HTTP request (JSON-RPC batch); results in the same order. */
   batch<T>(calls: { method: string; params: unknown[] }[]): Promise<T[]> {
     return this.slot(async () => {
-      const r = await fetch(this.o.url, {
-        method: "POST", headers: { "content-type": "application/json", ...(this.auth ? { authorization: this.auth } : {}) },
-        body: JSON.stringify(calls.map((c, i) => ({ jsonrpc: "1.0", id: i, method: c.method, params: c.params }))),
-        signal: AbortSignal.timeout(this.o.timeoutMs ?? 120_000),
-      });
-      if (r.status === 429) throw new RpcError(429, "rate limited");
-      const j = (await r.json().catch(() => null)) as { id: number; result?: T; error?: { code: number; message: string } }[] | null;
-      if (!Array.isArray(j)) throw new RpcError(-1, `bad RPC batch response (HTTP ${r.status})`);
+      const j = (await this.post(calls.map((c, i) => ({ jsonrpc: "1.0", id: i, method: c.method, params: c.params })))) as { id: number; result?: T; error?: { code: number; message: string } }[];
+      if (!Array.isArray(j)) throw new RpcError(-1, "bad RPC batch response");
       j.sort((a, b) => a.id - b.id);
       return j.map((x) => { if (x.error) throw new RpcError(x.error.code, x.error.message); return x.result as T; });
     });
@@ -73,16 +132,7 @@ export class BitcoinRpc {
 
   call<T>(method: string, params: unknown[] = []): Promise<T> { return this.slot(() => this.call1<T>(method, params)); }
   private async call1<T>(method: string, params: unknown[]): Promise<T> {
-    const r = await fetch(this.o.url, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...(this.auth ? { authorization: this.auth } : {}) },
-      body: JSON.stringify({ jsonrpc: "1.0", id: ++this.id, method, params }),
-      signal: AbortSignal.timeout(this.o.timeoutMs ?? 120_000),
-    });
-    if (r.status === 401) throw new RpcError(-1, "Bitcoin Core refused the RPC credentials (check --cookie-file or --bitcoin-rpc-username/password)");
-    if (r.status === 429) throw new RpcError(429, "rate limited");
-    const j = (await r.json().catch(() => null)) as { result?: T; error?: { code: number; message: string } } | null;
-    if (!j) throw new RpcError(-1, `bad RPC response (HTTP ${r.status})`);
+    const j = (await this.post({ jsonrpc: "1.0", id: ++this.id, method, params })) as { result?: T; error?: { code: number; message: string } };
     if (j.error) throw new RpcError(j.error.code, j.error.message);
     return j.result as T;
   }

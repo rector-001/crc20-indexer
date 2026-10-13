@@ -16,6 +16,8 @@ ExecStart=/usr/bin/env crc20 --chain mainnet \
   --data-dir /var/lib/crc20 \
   server --http-host 127.0.0.1 --http-port 8640
 Environment=NODE_ENV=production
+# optional: CRC20_* settings, e.g. CRC20_BITCOIN_RPC_USERNAME=… (chmod 600, owned by root)
+EnvironmentFile=-/etc/crc20/crc20.env
 Restart=on-failure
 RestartSec=10
 TimeoutStopSec=60

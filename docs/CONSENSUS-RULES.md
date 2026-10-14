@@ -1,7 +1,7 @@
 # BONS consensus rules (as implemented)
 
 Every rule our indexer applies today, written from the code (`src/indexer.mjs`, `src/curve.mjs`, `src/launchpad.mjs`,
-`src/covenant.mjs`, `src/burn.mjs`, `src/config.mjs`) on 2026-10-12. If this document and the code
+`src/ammfee.mjs`, `src/covenant.mjs`, `src/burn.mjs`, `src/config.mjs`) on 2026-10-12. If this document and the code
 disagree, the code is what runs; fix one or the other. Known problems in our own rules are listed at the end, under
 **Known issues**.
 
@@ -36,9 +36,12 @@ disagree, the code is what runs; fix one or the other. Known problems in our own
 
 A transaction with no marker is ignored. Otherwise the first rule whose shape matches settles the transaction alone:
 
-1. **Merge** (from its activation), §7.
-2. Otherwise the **first marker** decides: `deploy` (§3), `mint` (§4 or §5), or `transfer` (§6, which itself tries
-   launch purchase, then batch, then single transfer).
+1. **TOKEN/BONS pool swap** (from `POOL_FROM`), §8.
+2. **Curve-pool op** `amm-add` / `amm-swap` / `amm-remove` (from `AMM_FROM`), §9. A malformed one moves nothing.
+3. **Split transfer** `sp-transfer` (from `LIST_SPLIT_FROM`), §7.1. An invalid one moves nothing.
+4. **Merge** (from `MERGE_FROM`), §7.2.
+5. Otherwise the **first marker** decides: `deploy` (§3), `mint` (§4 or §5), or `transfer` (§6, which itself tries
+   launch purchase, then batch / multi-split, then single transfer).
 
 ## 3. Deploy
 
@@ -149,17 +152,81 @@ Marker `{"p":"crc-20","op":"mint","tick":"BONS"}`; the token must be deployed.
 - **Must hold:** the counts match; the output ranges do not overlap; each marker's tick equals its coin's tick.
 - **All or nothing.**
 
-## 7. Merge (mainnet from block **969,976**)
+### 6.3 Multi-split: 2+ transfer markers, one coin (from `MULTISPLIT_FROM`)
+
+- **Effect:** marker j's receiver is out k_j+1; the sum must be ≤ the coin; the change is right after the last
+  receiver.
+- **All or nothing.**
+
+## 7. Other moves
+
+### 7.1 `sp-transfer` (from `LIST_SPLIT_FROM`)
+
+- **Marker:** `{"op":"sp-transfer","tick":T,"amt":["a1","a2",…]}`, the only marker in the transaction.
+- **Amounts:** 1 to 2,000 positive integer strings.
+- **Coins:** one or more coins of T; each passes the merge checks (§7.2); none created by this transaction.
+- **Outputs:** amount i goes to out k+1+i (each exactly 330 sat). Whatever is left becomes one change coin right
+  after the last receiver.
+- **All or nothing.**
+
+### 7.2 Merge (from `MERGE_FROM`; mainnet **969,976**)
 
 - **Shape:** exactly one marker, a `transfer`; 2+ coins of that tick; `amt` = their exact total; out k+1 exactly
   330 sat.
-- **Coin check:**
+- **Coin check (`poolSealOk`):**
   - active and not created by this transaction;
   - launch coins reveal their own CMR;
   - allocation coins reveal a valid leaf.
 - **Effect:** one coin holding the total.
 
-## 8. BTC/USD oracle (used by the BONS mint and launch deploy / proof-of-burn)
+## 8. TOKEN/BONS pool swap (resting offers, from `POOL_FROM`)
+
+- **Bound triple:** a maker's offer is three inputs, each signed `0x83`:
+  - input j is the offered coin, bound to out j: a transfer marker of the **other** token (what the maker wants);
+  - input j+1 is a 330-sat coin, bound to out j+1: 330 sat to the maker's covenant for the wanted token;
+  - input j+2 is a 330-sat coin, bound to out j+2: 330 sat back to the offered coin's own address (refund slot).
+- **Valid when:**
+  - every marker is a transfer;
+  - per token, markers and coins pair one-to-one (each marker moves exactly its coin), or one coin to several
+    markers summing exactly to it;
+  - there is no change, no stray coin, no unpaid marker;
+  - receivers are out k+1, and not a marker or a refund slot;
+  - each coin passes `poolSealOk`.
+
+  Then everything moves at once.
+- **Invalid:** nothing moves, and **every offered coin returns to its refund slot**. A maker can never lose a coin
+  to a transaction that does not pay them.
+
+## 9. Curve pools (x·y = k, TOKEN/BONS, from `AMM_FROM`)
+
+- **Shape:** exactly one marker, of `amm-add`, `amm-swap` or `amm-remove`.
+  - The tick must be a launch token (not BONS).
+  - Every coin input is of that token or of BONS, passes `poolSealOk`, and was not created by this transaction.
+  - The owner (LP) is input 0's address, signed by key path (a witness of 1 item).
+- **`amm-add`** `{"amt":["tok","bons"],"lock":"L"}`:
+  - **Lock:** L is one of 0 / 144 / 1008 / 4320 blocks.
+  - **Change slots:** out k+1 and k+2 are 330 change slots, both required.
+  - **First add:** `shares = isqrt(tok·bons) − 1000`; the 1,000 shares are locked forever.
+  - **Later adds:** the limiting side sets the shares, and the other side is taken at the pool ratio, rounded up.
+  - **Automatic payback:** a locked add with 330 slots at out k+3 (token) and k+4 (BONS) gets paid back
+    automatically at `height + L`, as coins credited into those slots with no transaction needed. Spending a slot
+    early cancels the automatic payback.
+- **`amm-swap`** `{"side":"buy"|"sell","amt":"in","min":"minOut"}`:
+  - **Coins:** only the input token's coins; out k+1 is the output coin and out k+2 is the input change.
+  - **LP fee:** 1% stays in the pool, `afterLp = floor(amt·99%)`.
+  - **Protocol fee (from `AMM_FEE_FROM`):** 2% in BONS, paid as BONS coins at out k+3..k+6 to the creator /
+    protocol / holders / partner covenants. The split is 0.35% / 1% / 0.35% / 0.30%; the protocol takes the
+    rounding; the creator falls back to protocol. A buy pays it from the BONS input, a sell from the BONS output.
+  - **Refund in full** (to out k+2) when: the output is 0, the output is below `min`, the output would drain the
+    reserve, or (fee active) the 4 fee slots are missing or wrong.
+- **`amm-remove`** `{"amt":"shares"}`:
+  - **Inputs:** no coin inputs; the owner signs by key path.
+  - **Shares:** only from unlocked positions, oldest first.
+  - **Pays:** `shares/S` of each reserve, to out k+1 (token) and out k+2 (BONS).
+- **Supply** is conserved: coins + pool reserves + burned = minted. Pool and share logs make every change
+  rewindable.
+
+## 10. BTC/USD oracle (used by the BONS mint and launch deploy / proof-of-burn)
 
 - **Lookup order** per height:
   1. A cached value in the DB.
@@ -168,29 +235,34 @@ Marker `{"p":"crc-20","op":"mint","tick":"BONS"}`; the token must be deployed.
   4. Otherwise the local UTXOracle from the block's own outputs, taking the median of the last 11 blocks.
 - **Every value is cached per height**; replay reads the cache. See Known issues.
 
-## 9. Burn
+## 11. Burn
 
 - **Direct burn:** sending to `BURN_ADDRESS` (`bc1prykz5…5grvgr`, NUMS key, no script path) burns (supply goes
   down).
 - **Burn sinks:** its covenant and 3 more nested covenants (`bc1pnnhy…`, `bc1pgkfn…`, `bc1ppmy5…`, `bc1p8l2k…`)
   are unspendable. Coins sent there stay in the ledger but count as burned and are never holders.
 
-## 10. Activation heights
+## 12. Activation heights
 
-| Rule | Mainnet | Regtest |
-| --- | --- | --- |
-| BONS deploy | 968,368 | 1 |
-| Legacy deploy rule ends | 968,745 | — |
-| Merge | **969,976** | 0 |
-| Holding address for BTC purchases | 969,196 | 0 |
-| Pre-burn holding for BONS purchases | 969,201 | 0 |
-| Per-buyer 2% cap (historical) | 969,196 → removal height to be announced | 0 → |
+| Rule | Mainnet | Signet | Regtest |
+| --- | --- | --- | --- |
+| BONS deploy | 968,368 | 324,041 | 1 |
+| Legacy deploy rule ends | 968,745 | — | — |
+| Merge | **969,976** | 324,969 | 0 |
+| Holding address for BTC purchases | 969,196 | — | 0 |
+| Pre-burn holding for BONS purchases | 969,201 | — | 0 |
+| Per-buyer 2% cap (historical) | 969,196 → removal height to be announced | 0 → 324,874 | 0 → |
+| Multi-split | pending | 324,769 | 0 |
+| TOKEN/BONS pool swaps (resting offers) | pending | 324,927 | 0 |
+| Curve pools + `sp-transfer` | pending | 325,731 | 0 |
+| Curve-pool 2% BONS fee | pending | 325,964 | 0 |
 
+"Set" means the value lives in the server env; it must be copied into this table before the spec is published.
 
-## 11. Known issues in our own rules (fix or freeze before publishing)
+## 13. Known issues in our own rules (fix or freeze before publishing)
 
 1. **Consensus depends on env.**
-   - Treasury, curve, fee, holding and pre-burn addresses, plus every activation height, come
+   - Treasury, curve, fee, escrow, pre-burn, partner and holders addresses, plus every activation height, come
      from `process.env`.
    - A node with a different env builds a different ledger.
    - Fix: hardcode per network in a consensus constants file.
@@ -206,7 +278,7 @@ Marker `{"p":"crc-20","op":"mint","tick":"BONS"}`; the token must be deployed.
      $83,387–84,545.
      sha256 `88f92e00b53f34c363b263d2c99884f9083715f50239b640c3b7c9d4be3db71f`.
 4. **The marker's tick is not checked on a single transfer.** It moves the first active coin's token whatever
-   `tick` says (§6.1). Batch and merge do check it. Fix with an activation height:
+   `tick` says (§6.1). Batch, merge, sp-transfer, pool and AMM rules do check it. Fix with an activation height:
    require `marker.tick == coin.tick`.
 5. **A coin spent without a marker stays `active`.** The token can never move again (the UTXO is gone), but it
    still counts in balances and supply. Fix: mark such coins `lost` (from an activation height), and show them as

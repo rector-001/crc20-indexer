@@ -45,6 +45,13 @@ export function openLedger(path: string): Db {
       to_treasury TEXT, to_hold TEXT, hold_address TEXT, outcome TEXT);
     CREATE TABLE IF NOT EXISTS launch_refunds (txid TEXT PRIMARY KEY, tick TEXT, height INTEGER, pay TEXT, payer TEXT, paid_json TEXT,
       paid_total TEXT, used TEXT, refund TEXT, reason TEXT);
+    CREATE TABLE IF NOT EXISTS amm_pools (tick TEXT PRIMARY KEY, reserve_tok TEXT NOT NULL, reserve_bons TEXT NOT NULL, shares TEXT NOT NULL, created_height INTEGER, created_txid TEXT);
+    CREATE TABLE IF NOT EXISTS amm_positions (txid TEXT PRIMARY KEY, tick TEXT NOT NULL, owner TEXT NOT NULL, shares TEXT NOT NULL, lock_until INTEGER NOT NULL, height INTEGER,
+      auto INTEGER NOT NULL DEFAULT 0, slot_tok TEXT, slot_bons TEXT, slot_tok_addr TEXT, slot_bons_addr TEXT, paid_height INTEGER);
+    CREATE INDEX IF NOT EXISTS amm_slot_tok ON amm_positions(slot_tok);
+    CREATE INDEX IF NOT EXISTS amm_slot_bons ON amm_positions(slot_bons);
+    CREATE TABLE IF NOT EXISTS amm_pool_log (seq INTEGER PRIMARY KEY AUTOINCREMENT, height INTEGER NOT NULL, tick TEXT NOT NULL, reserve_tok TEXT NOT NULL, reserve_bons TEXT NOT NULL, shares TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS amm_share_log (seq INTEGER PRIMARY KEY AUTOINCREMENT, height INTEGER NOT NULL, pos_txid TEXT NOT NULL, delta TEXT NOT NULL, kind TEXT NOT NULL);
   `);
   return db;
 }
@@ -150,6 +157,21 @@ export function rewindTo(db: Db, fork: number) {
     db.prepare("DELETE FROM key_book WHERE height >= ?").run(fork);
     for (const t of ["deltas", "blocks", "oracle", "deploy", "bons_fills", "pob_used", "other_deploys", "launch_refunds", "launch_payments"])
       db.prepare(`DELETE FROM ${t} WHERE height >= ?`).run(fork);
+    for (const r of db.prepare("SELECT * FROM amm_share_log WHERE height >= ? ORDER BY seq DESC").all(fork) as { pos_txid: string; delta: string; kind: string }[]) {
+      const p = db.prepare("SELECT shares FROM amm_positions WHERE txid=?").get(r.pos_txid) as { shares: string } | undefined;
+      if (p) db.prepare("UPDATE amm_positions SET shares=? WHERE txid=?").run((BigInt(p.shares) - BigInt(r.delta)).toString(), r.pos_txid);
+      if (r.kind === "payback") db.prepare("UPDATE amm_positions SET paid_height=NULL WHERE txid=?").run(r.pos_txid);
+      if (r.kind === "forfeit") db.prepare("UPDATE amm_positions SET auto=1 WHERE txid=?").run(r.pos_txid);
+    }
+    db.prepare("DELETE FROM amm_share_log WHERE height >= ?").run(fork);
+    db.prepare("DELETE FROM amm_positions WHERE height >= ?").run(fork);
+    const touched = (db.prepare("SELECT DISTINCT tick FROM amm_pool_log WHERE height >= ?").all(fork) as { tick: string }[]).map((r) => r.tick);
+    db.prepare("DELETE FROM amm_pool_log WHERE height >= ?").run(fork);
+    for (const tk of touched) {
+      const last = db.prepare("SELECT * FROM amm_pool_log WHERE tick=? ORDER BY seq DESC LIMIT 1").get(tk) as { reserve_tok: string; reserve_bons: string; shares: string } | undefined;
+      if (last) db.prepare("UPDATE amm_pools SET reserve_tok=?, reserve_bons=?, shares=? WHERE tick=?").run(last.reserve_tok, last.reserve_bons, last.shares, tk);
+      else db.prepare("DELETE FROM amm_pools WHERE tick=?").run(tk);
+    }
     // event ids continue from the last kept event, exactly as on a node that never saw the dropped blocks
     db.prepare("UPDATE sqlite_sequence SET seq = (SELECT COALESCE(MAX(id), 0) FROM deltas) WHERE name = 'deltas'").run();
     // balances, as a sync to this height leaves them: a row for every (token, owner) ever credited — kept at 0 once

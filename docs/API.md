@@ -63,8 +63,8 @@ moves nothing, and `GET /v1/transactions/{txid}` says which pending rule it woul
   "launch_contract": "sha256(\"crc-20:<TICK>:v1:bonding:max=1000000000:no-timelock:<deploy txid>\")",
   "nums_internal_key": "50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0",
   "burn_sinks": ["bc1prykz5…", "bc1pnnhy…", "bc1pgkfn…", "bc1ppmy5…", "bc1p8l2k…"],
-  "activations": { "merge": 969976 },
-  "addresses": { "treasury": "bc1pwlvtk7…", "flywheel": "bc1p9nzm…", "holding": { "address": "bc1ptpxpph…", "from": 969196 }, "preburn": { "covenant": "bc1plxjz…", "from": 969201 } } }
+  "activations": { "merge": 969976, "multi_split": "pending", "pool_swap": "pending", "amm": "pending", "sp_transfer": "pending", "amm_fee": "pending" },
+  "addresses": { "treasury": "bc1pwlvtk7…", "fee": "…", "holders": "…", "partner": "…", "escrow": null, "preburn": null } }
 ```
 
 ## 2. Tokens
@@ -83,14 +83,15 @@ Every token this node indexes.
 `status`: `complete` (BONS), `minting`, `graduated` (all minted), `closed` (576 blocks passed).
 
 ### `GET /v1/tokens/{tick}`
-One token in full: its deploy JSON as written on chain, contract, curve, raise and supply figures.
+One token in full: its deploy JSON as written on chain, contract, curve, raise, supply figures, pool (if any).
 ```json
 { "tick": "LPBB", "kind": "launch", "deploy": { "txid": "…", "height": 970900, "creator": "bc1p…",
     "marker": {"p":"crc-20","op":"deploy","tick":"LPBB","type":"bonding","max":"1000000000","lim":"1000000000","btc":"…","bons":"…"},
     "proof_of_burn_txid": "…" },
   "contract": "…", "curve": { "shape": "linear", "start_to_end": 4, "target_sats": "…", "rates": { "btc": "…", "bons": "…" } },
-  "supply": { "max": "…", "minted": "…", "burned": "…", "circulating": "…" },
-  "raise": { "status": "minting", "raised_sats": "…", "closes_at_height": 971476 } }
+  "supply": { "max": "…", "minted": "…", "burned": "…", "circulating": "…", "in_pools": "…" },
+  "raise": { "status": "minting", "raised_sats": "…", "closes_at_height": 971476 },
+  "pool": { "reserve_token": "…", "reserve_bons": "…", "shares": "…" } }
 ```
 
 ### `GET /v1/tokens/{tick}/holders`
@@ -101,7 +102,7 @@ Holders by **owner wallet** (a covenant whose owner is not yet proven is listed 
 ```
 
 ### `GET /v1/tokens/{tick}/activity`
-Every operation of the token, newest first (same item shape as address activity below). `?op=mint,transfer,burn,merge`.
+Every operation of the token, newest first (same item shape as address activity below). `?op=mint,transfer,burn,merge,split,pool_swap,amm_add,amm_swap,amm_remove,amm_payback,refund`.
 
 ### `GET /v1/tokens/{tick}/quote/mint?sats=…&payer=…`
 The tokens a mint/purchase of this size would allocate **if mined in the next block** at today's state (curve,
@@ -164,10 +165,11 @@ What happened to this wallet's tokens, newest first. `?tick=` filters.
 ### `GET /v1/addresses/{address}/protected-outputs`
 Outputs at **this address** that must not be spent as plain BTC. A wallet calls this before choosing fee inputs,
 the same way UniSat keeps inscriptions and runes out of fee inputs. Coins sit at covenant addresses, so a normal
-wallet address rarely has any. The endpoint exists for addresses that receive coins directly (covenant addresses
-imported as watch-only).
+wallet address rarely has any. The endpoint exists for addresses that receive coins directly (pool payback slots,
+covenant addresses imported as watch-only).
 ```json
-{ "items": [ { "outpoint": "txid:3", "reason": "token_coin", "tick": "BONS", "amount": "…" } ] }
+{ "items": [ { "outpoint": "txid:3", "reason": "token_coin", "tick": "BONS", "amount": "…" },
+             { "outpoint": "txid:4", "reason": "pool_payback_slot", "tick": "LPBB", "matures_at": 971900 } ] }
 ```
 
 ## 4. Outputs and transactions
@@ -198,10 +200,12 @@ The indexer's verdict on a transaction: which rule settled it, what moved, or wh
   "spent": [ { "outpoint": "…:1", "tick": "BONS", "amount": "…", "owner": "bc1p…" } ],
   "created": [ { "outpoint": "…:1", "tick": "BONS", "amount": "…", "covenant": "bc1p…", "role": "receiver" },
                { "outpoint": "…:2", "tick": "BONS", "amount": "…", "covenant": "bc1p…", "role": "change" } ],
-  "burned": [], "notes": [] }
+  "burned": [], "pool": null, "notes": [] }
 ```
-- **`rule`:** `deploy`, `mint`, `launch_purchase`, `transfer`, `batch`, `merge`, or `none`.
-- **When `valid: false`:** `reason` says which check failed.
+- **`rule`:** `deploy`, `mint`, `launch_purchase`, `transfer`, `batch`, `multi_split`, `sp_transfer`, `merge`,
+  `pool_swap`, `amm_add`, `amm_swap`, `amm_remove`, or `none`.
+- **When `valid: false`:** `reason` says which check failed, and `refunds` lists any coins the rules returned
+  (pool swaps and `amm-swap`).
 
 ### `POST /v1/transactions/simulate`
 **Before you sign or broadcast:** what this transaction would do if it confirmed next, computed by the same rules
@@ -235,7 +239,16 @@ Response:
 `spent`/`created`/`events` as a simulation. `GET /v1/addresses/{address}/coins` adds `pending_spent_by` (txid or
 `null`) to each coin, and lists `arriving` coins.
 
-## 5. Blocks and events (exchanges and explorers)
+## 5. Pools
+
+| Endpoint | Returns |
+| --- | --- |
+| `GET /v1/pools` | every curve pool (TOKEN/BONS): reserves, shares, price, 24h volume |
+| `GET /v1/pools/{tick}` | one pool, plus its recent swaps |
+| `GET /v1/pools/{tick}/positions?owner=` | LP positions: shares, lock, automatic payback slots, value now |
+| `GET /v1/pools/{tick}/quote?side=buy\|sell&amount=` | output for an `amm-swap` of that size at today's reserves, with the 1% LP fee and the 2% fee split |
+
+## 6. Blocks and events (exchanges and explorers)
 
 | Endpoint | Returns |
 | --- | --- |
@@ -255,7 +268,7 @@ A `text/event-stream` connection. The events are:
 `?from_id=N` first replays every row after `N`, so a client that reconnects with its last id misses nothing.
 Without it, the stream starts at the current tip.
 
-## 6. Builders (optional helpers)
+## 7. Builders (optional helpers)
 
 Unsigned PSBTs a wallet signs with its own key (`signPsbt` in UniSat, Xverse, OKX). They are conveniences: anyone
 can build the same transactions from the coin data above. The node never sees a key or a signature, and keeps no
@@ -280,7 +293,7 @@ A coin input is spent by script path and signed with the wallet's **tweaked** ke
 UniSat reads `useTweakedSigner`. OKX reads `useTweakSigner`; without it, OKX signs a tapleaf with the untweaked key
 and the signature is invalid. Pass `inputs_to_sign` straight to `signPsbt`'s `toSignInputs`.
 
-## 7. Compatibility layer (optional)
+## 8. Compatibility layer (optional)
 
 For wallets that already speak UniSat's open API, a node can serve the same data under the paths those wallets
 call. These are aliases of the endpoints above; the same numbers come back in that API's field names.
@@ -293,8 +306,9 @@ call. These are aliases of the endpoints above; the same numbers come back in th
 | `/v1/indexer/crc20/{tick}/holders` | holders |
 | `/v1/indexer/address/{address}/crc20/{tick}/utxo` | coins |
 
-## 8. What the API never does
+## 9. What the API never does
 
 - **No signing and no keys.** It never asks for a private key or a signature.
-- **No off-chain state in answers.** It never mixes in marketplace listings or other application state.
+- **No off-chain state in answers.** It never mixes in marketplace listings or swap offers: those are application
+  state, not ledger state.
 - **No guessing.** A covenant whose owner is not proven is shown as `owner: null`.

@@ -149,7 +149,8 @@ export function applyAmm(c: Ctx, t: Tx, height: number, s: Exclude<AmmShape, { i
     }
     tx(c.db, () => {
       for (const x of seals) spendSeal(c.db, x.seal.outpoint, t.txid);
-      if (out <= 0n || out < minOut || outPool >= Rout || (feeOn && !feeSlots)) {      // slippage / dust / no fee slots: all back
+      // trading not open yet (ammSwap) / slippage / dust / no fee slots: all back
+      if (!isActive(c.net.activations.ammSwap, height) || out <= 0n || out < minOut || outPool >= Rout || (feeOn && !feeSlots)) {
         coin(c, t, height, k + 2, inTick, have, change);
         delta(c.db, height, t.txid, `amm-refund:${inTick}`, owner, change.scriptpubkey_address, have);
         return;

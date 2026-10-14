@@ -21,6 +21,9 @@ export interface Activations {
   spTransfer: Activation;
   /** the curve pools' 2% fee paid in BONS coins */
   ammFee: Activation;
+  /** curve-pool TRADES (amm-swap): before it a trade is refunded in full and the pool does not move (liquidity can already
+   * be added and removed from `amm`) */
+  ammSwap: Activation;
   /** before this height every non-BONS deploy is stored as written (mainnet history: TREE @968598) */
   legacyDeploysUntil: number;
   /** HISTORICAL: a bonding-token purchase is capped at 2% of supply (20,000,000 tokens) per buyer covenant, from `from`
@@ -74,8 +77,8 @@ export const NETWORKS: Record<NetworkName, NetworkConstants> = {
       curveOpeningPayer: "bc1psnnur93sd59mxc53qk5w7v4tjq9wgcdejq0ag4vn4cphjsa5aq2q3ee5hm",   // input 0 of the opening-slope mints
       // flywheel: 45% of BCAT's BTC purchases (tx 02104aec…, output 2) — also takes the 3,000-sat BONS mint fee
       protocolFee: "bc1p9nzm4vf9waecsmnhe0dz8ha2mpryx9uwnu8yysy8uxzdhp76c3zqpl6yf0",
-      holders: null,         // set with the mainnet curve-pool activation
-      partner: null,         // set with the mainnet curve-pool activation
+      holders: "bc1p8kgysmvye0nqkzk9smq2jtk5w7kw7lyywszgn83zxs9aezaglgqs9qdkkr",   // the BONS reflection wallet
+      partner: "bc1pvlqh9xuj94xptwamqa6t60d03vg3zhnpexlr8g3nkvkg26mg2hgsz9unc4",
       // every BTC purchase of every token but BCAT paid here (first: tx 5ef62919…, block 969,196)
       launchEscrow: { address: "bc1ptpxpph8a5m05mmq5m5d5u0ldzd4wv5y4hct58z5a6qhd3mrnlrqq0dpuzc", from: 969196 },
       // BONS purchases paid their 80% + 20% here (first: tx e14094d5…, block 969,201); BCAT's earlier BONS purchases
@@ -85,7 +88,8 @@ export const NETWORKS: Record<NetworkName, NetworkConstants> = {
     launchTargetMinUsd: 1_000,
     activations: {
       // live on mainnet: merge. Published but pending on mainnet (live on signet): the rest.
-      merge: 969976, multiSplit: "pending", poolSwap: "pending", amm: "pending", spTransfer: "pending", ammFee: "pending",
+      // 2026-10-14: the new rules from block 971,413; curve-pool trades and resting offers not yet
+      merge: 969976, multiSplit: 971413, poolSwap: "pending", amm: 971413, spTransfer: 971413, ammFee: 971413, ammSwap: "pending",
       launchWalletCap: { from: 969196, until: null },   // the live config (BONS_LAUNCH_WALLET_CAP_FROM); removal height to be announced
       legacyDeploysUntil: 968745,
     },
@@ -107,7 +111,7 @@ export const NETWORKS: Record<NetworkName, NetworkConstants> = {
     },
     launchTargetMinUsd: 1_000,
     activations: {
-      merge: 324969, multiSplit: 324769, poolSwap: 324927, amm: 325731, spTransfer: 325731, ammFee: 325964,
+      merge: 324969, multiSplit: 324769, poolSwap: 324927, amm: 325731, spTransfer: 325731, ammFee: 325964, ammSwap: 325731,
       launchWalletCap: { from: 0, until: 324874 },      // signet: BONS_LAUNCH_WALLET_CAP_UNTIL
       legacyDeploysUntil: 0,
     },
@@ -122,7 +126,7 @@ export const NETWORKS: Record<NetworkName, NetworkConstants> = {
     addresses: { treasury: "", curveOpeningPayer: null, protocolFee: null, holders: null, partner: null, launchEscrow: null, launchPreburnCovenant: null },
     launchTargetMinUsd: 1_000,
     activations: {
-      merge: 0, multiSplit: 0, poolSwap: 0, amm: 0, spTransfer: 0, ammFee: 0,
+      merge: 0, multiSplit: 0, poolSwap: 0, amm: 0, spTransfer: 0, ammFee: 0, ammSwap: 0,
       launchWalletCap: { from: 0, until: null },        // the reference regtest suites test the cap
       legacyDeploysUntil: 0,
     },

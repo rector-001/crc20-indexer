@@ -18,8 +18,8 @@ import { startApi } from "../dist/api/server.js";
 import { startMockNode } from "./support/mock-node.mjs";
 
 const V = JSON.parse(gunzipSync(readFileSync(new URL("./vectors/regtest-chain.json.gz", import.meta.url))).toString());
-// the private build runs extra rules on regtest: its own expected ledger for this chain
-V.expect = JSON.parse(readFileSync(new URL("./vectors/private-expect.json", import.meta.url), "utf8")); delete V.expect.about;
+// the swap rules are active on regtest from block 0: the expected ledger for this chain with them
+V.expect = JSON.parse(readFileSync(new URL("./vectors/swap-rules-expect.json", import.meta.url), "utf8")); delete V.expect.about;
 const net = withAddresses(NETWORKS.regtest, V.addresses);
 const dir = mkdtempSync(join(tmpdir(), "crc20-test-"));
 let n = 0;

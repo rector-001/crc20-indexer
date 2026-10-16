@@ -1,0 +1,6 @@
+{
+ "about": "The ledger on the regtest vector with the swap rules active (they are active on regtest from block 0). Correctness of those rules is proven against signet's own ledger on the full regtest chain (docs: OPEN-INDEXER-DEFERRED-RULES.md).",
+ "cursor": 1147,
+ "rows": 2157,
+ "sha256": "c2deaa854c5be3300ad3d4d8c126398b82dc568f98745871a621744c5097997c"
+}

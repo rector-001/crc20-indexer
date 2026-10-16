@@ -87,8 +87,8 @@ export const NETWORKS: Record<NetworkName, NetworkConstants> = {
     },
     launchTargetMinUsd: 1_000,
     activations: {
-      // live on mainnet: merge. Published but pending on mainnet (live on signet): the rest.
-      // 2026-10-14: the new rules from block 971,413; curve-pool trades and resting offers not yet
+      // live on mainnet: merge (969,976); multi-split, curve pools, sp-transfer and the curve-pool fee (971,413);
+      // curve-pool trades (971,541). Still pending on mainnet (live on signet): resting TOKEN/BONS pool offers.
       merge: 969976, multiSplit: 971413, poolSwap: "pending", amm: 971413, spTransfer: 971413, ammFee: 971413, ammSwap: 971541,
       launchWalletCap: { from: 969196, until: null },   // the live config (BONS_LAUNCH_WALLET_CAP_FROM); removal height to be announced
       legacyDeploysUntil: 968745,

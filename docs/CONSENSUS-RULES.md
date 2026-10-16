@@ -252,10 +252,11 @@ Marker `{"p":"crc-20","op":"mint","tick":"BONS"}`; the token must be deployed.
 | Holding address for BTC purchases | 969,196 | — | 0 |
 | Pre-burn holding for BONS purchases | 969,201 | — | 0 |
 | Per-buyer 2% cap (historical) | 969,196 → removal height to be announced | 0 → 324,874 | 0 → |
-| Multi-split | pending | 324,769 | 0 |
+| Multi-split | **971,413** | 324,769 | 0 |
 | TOKEN/BONS pool swaps (resting offers) | pending | 324,927 | 0 |
-| Curve pools + `sp-transfer` | pending | 325,731 | 0 |
-| Curve-pool 2% BONS fee | pending | 325,964 | 0 |
+| Curve pools (add / remove liquidity) + `sp-transfer` | **971,413** | 325,731 | 0 |
+| Curve-pool 2% BONS fee | **971,413** | 325,964 | 0 |
+| Curve-pool trades (`amm-swap`) | **971,541** | 325,731 | 0 |
 
 "Set" means the value lives in the server env; it must be copied into this table before the spec is published.
 

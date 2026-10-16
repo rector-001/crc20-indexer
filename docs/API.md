@@ -46,8 +46,8 @@ ever reflects committed blocks.
 ### `GET /v1/status`
 Sync state and identity of this node.
 ```json
-{ "network": "bitcoin", "version": "1.0.0", "protocol": "crc-20",
-  "indexed_height": 971040, "indexed_hash": "0000…", "chain_tip": 971040, "synced": true,
+{ "network": "mainnet", "version": "1.0.0", "protocol": "crc-20",
+  "indexed_height": 971678, "indexed_hash": "0000…", "chain_tip": 971678, "synced": true, "first_block": 968368,
   "mempool": { "enabled": true, "txs": 214 },
   "pinned": { "oracle": "sha256:88f92e00…3db71f" } }
 ```
@@ -56,15 +56,18 @@ Exchanges should wait for `synced: true` and `indexed_height ≥` their transact
 ### `GET /v1/rules`
 Every consensus constant this node applies, for auditing two nodes against each other. A rule is either active from
 a height or `"pending"`: published, but not activated on this network, so never applied (a transaction using it
-moves nothing, and `GET /v1/transactions/{txid}` says which pending rule it would need).
+moves nothing, and `GET /v1/transactions/{txid}` says which pending rule it would need). On mainnet every swap rule
+is active except resting TOKEN/BONS pool offers (`poolSwap`); curve-pool trades (`ammSwap`) from block 971,541.
 ```json
-{ "network": "bitcoin",
+{ "network": "mainnet", "first_block": 968368,
   "contracts": { "BONS": "9bc1262bec613f73c51c455b767216c0d68cfcb8bd097cd817050a30d240ac5b" },
-  "launch_contract": "sha256(\"crc-20:<TICK>:v1:bonding:max=1000000000:no-timelock:<deploy txid>\")",
-  "nums_internal_key": "50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0",
+  "bonding_contract": "sha256(\"crc-20:<TICK>:v1:bonding:max=1000000000:no-timelock:<deploy txid>\")",
   "burn_sinks": ["bc1prykz5…", "bc1pnnhy…", "bc1pgkfn…", "bc1ppmy5…", "bc1p8l2k…"],
-  "activations": { "merge": 969976, "multi_split": "pending", "pool_swap": "pending", "amm": "pending", "sp_transfer": "pending", "amm_fee": "pending" },
-  "addresses": { "treasury": "bc1pwlvtk7…", "fee": "…", "holders": "…", "partner": "…", "escrow": null, "preburn": null } }
+  "activations": { "merge": 969976, "multiSplit": 971413, "poolSwap": "pending", "amm": 971413, "spTransfer": 971413,
+                   "ammFee": 971413, "ammSwap": 971541, "launchWalletCap": { "from": 969196, "until": null }, "legacyDeploysUntil": 968745 },
+  "addresses": { "treasury": "bc1pwlvtk7…", "curve_opening_payer": "…", "flywheel": "…", "holding": { … }, "preburn": { … } },
+  "bonding": { "supply": "1000000000", "raise_closes_after_blocks": 576,
+               "split_btc_bps": { "creator": 4500, "flywheel": 4500, "treasury": 1000 }, "split_bons_bps": { "burn": 8000, "treasury": 2000 } } }
 ```
 
 ## 2. Tokens

@@ -6,6 +6,7 @@ import type { Ctx } from "../protocol/context.js";
 import { applyTx } from "../protocol/dispatch.js";
 import { linkBlockKeys, linkTxKeys, resetKeyWatch } from "../protocol/tokens.js";
 import { markersOf } from "../protocol/message.js";
+import { ammPayMatured, ammWatchSlots } from "../protocol/amm.js";
 import { oracleForHeight, type OracleSource } from "../protocol/oracle.js";
 import { type BitcoinRpc, fetchBlocks, type FetchedBlock } from "./fetcher.js";
 
@@ -25,16 +26,18 @@ export interface UpdateOptions {
   linkKeys?: boolean;
 }
 
-/** Apply one block: every transaction in order. */
+/** Apply one block: every transaction in order, then the end-of-block curve-pool paybacks. */
 export function indexBlock(c: Ctx, b: FetchedBlock, oracle: OracleSource) {
   const h = b.height;
   tx(c.db, () => {
     const btcUsd = oracleForHeight(c.db, h, b.txs, oracle);
     let markers = false;
     for (const t of b.txs) {
+      ammWatchSlots(c, t, h);                                              // a curve-pool payback slot spent early cancels it
       applyTx(c, t, h, btcUsd);
       if (markersOf(t).length) { linkTxKeys(c, t, h); markers = true; }   // proven owners of the coins it created (not consensus)
     }
+    ammPayMatured(c, h);                                                   // end of block: matured locked positions paid into their slots
     if (b.taprootKeys) linkBlockKeys(c, b.taprootKeys, h, markers);     // owners whose key shows up in any transaction
     putBlockHash(c.db, h, b.hash);
     setCursor(c.db, h + 1);

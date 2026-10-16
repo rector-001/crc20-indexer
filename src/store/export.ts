@@ -5,7 +5,7 @@ import { all, getCursor, type Db } from "./ledger.js";
 
 export const EXPORT_TABLES: [string, string][] = [
   ["deploy", "tick"], ["other_deploys", "txid"], ["seals", "outpoint"], ["balances", "tick, address"],
-  ["deltas", "id"], ["pob_used", "burn_txid"], ["bons_fills", "txid"],
+  ["deltas", "id"], ["pob_used", "burn_txid"], ["bons_fills", "txid"], ["amm_pools", "tick"], ["amm_positions", "txid"],
   ["meta", "k"], ["blocks", "height"], ["oracle", "height"],
 ];
 

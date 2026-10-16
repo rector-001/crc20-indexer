@@ -20,7 +20,7 @@ export const VERSION: string = JSON.parse(readFileSync(join(dirname(fileURLToPat
 /* ── flags ────────────────────────────────────────────────────────────────────────────────────────────────────────── */
 type Flag = { name: string; arg?: string; help: string; boolean?: boolean; values?: string[]; number?: boolean };
 const GLOBAL: Flag[] = [
-  { name: "chain", arg: "CHAIN", values: ["mainnet", "regtest"], help: "Chain to index [default: mainnet]. -r is short for --chain regtest" },
+  { name: "chain", arg: "CHAIN", values: ["mainnet", "signet", "regtest"], help: "Chain to index [default: mainnet]. -s / -r are short for --chain signet / regtest" },
   { name: "bitcoin-rpc-url", arg: "URL", help: "Bitcoin Core RPC [default: http://127.0.0.1:8332, regtest :18443]" },
   { name: "cookie-file", arg: "FILE", help: "RPC cookie file [default: <bitcoin-data-dir>/.cookie]" },
   { name: "bitcoin-data-dir", arg: "DIR", help: "Bitcoin Core data directory, to find the cookie [default: ~/.bitcoin]" },
@@ -146,6 +146,7 @@ function parse(argv: string[]) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (a === "-r") flags.chain = "regtest";
+    else if (a === "-s") flags.chain = "signet";
     else if (a === "-h") flags.help = "1";
     else if (a === "-V") flags.version = "1";
     else if (a.startsWith("--")) {
@@ -161,7 +162,7 @@ function parse(argv: string[]) {
   return { flags, rest };
 }
 
-const CHAIN: Record<string, NetworkName> = { mainnet: "bitcoin", bitcoin: "bitcoin", regtest: "regtest" };
+const CHAIN: Record<string, NetworkName> = { mainnet: "bitcoin", bitcoin: "bitcoin", signet: "signet", regtest: "regtest" };
 
 async function main() {
   const { flags: cli, rest } = parse(process.argv.slice(2));

@@ -1,11 +1,12 @@
-// TRANSFERS. Ported from crc20-stack src/indexer.mjs: the single transfer (op "transfer"), batch (transferBatchShape,
-// planTransferBatch), merge (mergeShape), and the coin check merge uses.
+// TRANSFERS. Ported from crc20-stack src/indexer.mjs: the single transfer (op "transfer"), batch / multi-split
+// (transferBatchShape, planTransferBatch, planMultiSplit), sp-transfer (listSplitShape), merge (mergeShape), and the coin
+// checks they share (poolSealOk).
 import { addBurnedAtoms, createSeal, delta, getCovenantOwner, getSeal, spendSeal, tx, type Seal } from "../store/ledger.js";
 import { covenantOfWallet, covenantWitness, leafCmr, ownerFromLeaf, BONS_CMR } from "./covenant.js";
 import { bigOrNull, type Marker } from "./message.js";
 import { TICK, type Ctx } from "./context.js";
 import { isActive } from "./constants/index.js";
-import { linkFunders, linkRevealedOwner, recordBonsFill, tickCmr } from "./tokens.js";
+import { cmrHex, linkFunders, linkRevealedOwner, recordBonsFill, tickCmr } from "./tokens.js";
 import type { Tx, TxIn, TxOut } from "./types.js";
 
 export interface SealIn { seal: Seal; vin: TxIn; index: number }
@@ -23,7 +24,7 @@ export function sealsIn(c: Ctx, t: Tx): SealIn[] {
 /** A 330-sat output with an address — the only kind a coin can be created at. */
 const coinOut = (o: TxOut | undefined): o is TxOut & { scriptpubkey_address: string } => !!o && o.value === 330 && !!o.scriptpubkey_address;
 
-/** May this coin move in this transaction? (merge's check) */
+/** May this coin move in this transaction? (the reference's poolSealOk) */
 export function sealOk(c: Ctx, t: Tx, seal: Seal, vin: TxIn): { tokenCmr: string | undefined } | null {
   if (seal.txid === t.txid || seal.status !== "active") return null;
   const w = covenantWitness(vin.witness, c.btc);
@@ -98,14 +99,15 @@ export function applySingleTransfer(c: Ctx, t: Tx, height: number, mk: Marker) {
   linkFunders(c, t, [toBurn ? null : recv.scriptpubkey_address, changeOut?.scriptpubkey_address], ok.tokenCmr);
 }
 
-/* ── batch: 2+ coins, one transfer marker each ─────────────────────────────────────────────────────────────────────── */
+/* ── batch (2+ coins, one marker each) and multi-split (one coin, 2+ markers) ────────────────────────────────────── */
 
 export interface BatchPlan { seal: Seal; vin: TxIn; index: number; k: number; amt: bigint; recv: TxOut & { scriptpubkey_address: string }; changeAtoms: bigint; changeOut?: TxOut; tokenCmr: string | undefined; toBurn: boolean }
 
-/** 2+ transfer markers and 2+ coins spent: a batch; else null (the single transfer applies). */
-export function batchShape(c: Ctx, t: Tx, markers: Marker[]): { markers: Marker[]; seals: SealIn[] } | null {
+/** 2+ transfer markers: a batch if 2+ coins are spent, a multi-split if one coin is (from its activation); else null. */
+export function batchShape(c: Ctx, t: Tx, height: number, markers: Marker[]): { markers: Marker[]; seals: SealIn[]; multiSplit?: boolean } | null {
   if (markers.length < 2 || markers.some((x) => x.m.op !== "transfer")) return null;
   const seals = sealsIn(c, t);
+  if (seals.length === 1 && isActive(c.net.activations.multiSplit, height)) return { markers, seals, multiSplit: true };
   if (seals.length < 2) return null;
   return { markers, seals };
 }
@@ -158,6 +160,86 @@ export function commitBatch(c: Ctx, t: Tx, height: number, plans: BatchPlan[]) {
   }
 }
 
+export function applyMultiSplit(c: Ctx, t: Tx, height: number, markers: Marker[], s: SealIn) {
+  const { seal, vin } = s;
+  if (seal.txid === t.txid || seal.status === "voided") return;
+  const ok = transferCoinOk(c, seal, vin);
+  if (!ok) return;
+  const sealAtoms = BigInt(seal.amount_atoms);
+  const legs: { k: number; amt: bigint; recv: TxOut & { scriptpubkey_address: string }; toBurn: boolean }[] = [];
+  let total = 0n, prevEnd = -1;
+  for (const { m, k, tick } of markers) {
+    if (k <= prevEnd) return;
+    if (tick !== seal.tick) return;
+    const amt = bigOrNull(m.amt);
+    if (amt === null || amt <= 0n) return;
+    const recv = t.vout[k + 1];
+    if (!coinOut(recv)) return;
+    total += amt;
+    if (total > sealAtoms) return;
+    legs.push({ k, amt, recv, toBurn: recv.scriptpubkey_address === c.directBurn });
+    prevEnd = k + 1;
+  }
+  const changeAtoms = sealAtoms - total, changeK = prevEnd + 1;
+  const changeOut = changeAtoms > 0n ? t.vout[changeK] : undefined;
+  if (changeAtoms > 0n && !coinOut(changeOut)) return;
+  revealOwner(c, t, seal, vin, ok.tokenCmr);
+  const tick = seal.tick;
+  tx(c.db, () => {
+    spendSeal(c.db, seal.outpoint, t.txid);
+    for (const l of legs) {
+      if (l.toBurn) addBurnedAtoms(c.db, l.amt, tick);
+      else createSeal(c.db, { outpoint: `${t.txid}:${l.k + 1}`, tick, txid: t.txid, vout: l.k + 1, height, owner_address: l.recv.scriptpubkey_address, amount_atoms: l.amt });
+      delta(c.db, height, t.txid, l.toBurn ? `burn:${tick}` : `transfer:${tick}`, seal.owner_address, l.toBurn ? c.directBurn : l.recv.scriptpubkey_address, l.amt);
+    }
+    if (changeAtoms > 0n) createSeal(c.db, { outpoint: `${t.txid}:${changeK}`, tick, txid: t.txid, vout: changeK, height, owner_address: changeOut!.scriptpubkey_address!, amount_atoms: changeAtoms });
+  });
+}
+
+/* ── sp-transfer: one marker, amt is a list (from its activation) ─────────────────────────────────────────────────── */
+
+const LIST_SPLIT_MAX = 2000;
+type SpShape = { invalid: true } | { mk: Marker; seals: SealIn[]; outs: { amt: bigint; k: number; out: TxOut & { scriptpubkey_address: string } }[]; changeAtoms: bigint; changeK: number; changeOut?: TxOut };
+
+export function spTransferShape(c: Ctx, t: Tx, height: number, markers: Marker[]): SpShape | null {
+  if (!isActive(c.net.activations.spTransfer, height)) return null;
+  if (markers.length !== 1 || markers[0]!.m.op !== "sp-transfer" || !Array.isArray(markers[0]!.m.amt)) return null;
+  const mk = markers[0]!, list = mk.m.amt as unknown[];
+  if (!list.length || list.length > LIST_SPLIT_MAX) return { invalid: true };
+  const amts: bigint[] = [];
+  for (const a of list) { if (typeof a !== "string" || !/^[1-9][0-9]{0,30}$/.test(a)) return { invalid: true }; amts.push(BigInt(a)); }
+  const seals = sealsIn(c, t);
+  if (!seals.length || seals.some((x) => x.seal.tick !== mk.tick || x.seal.txid === t.txid)) return { invalid: true };
+  for (const x of seals) if (!sealOk(c, t, x.seal, x.vin)) return { invalid: true };
+  const total = seals.reduce((a, x) => a + BigInt(x.seal.amount_atoms), 0n), sum = amts.reduce((a, x) => a + x, 0n);
+  if (sum > total) return { invalid: true };
+  const outs: { amt: bigint; k: number; out: TxOut & { scriptpubkey_address: string } }[] = [];
+  for (let i = 0; i < amts.length; i++) {
+    const out = t.vout[mk.k + 1 + i];
+    if (!coinOut(out)) return { invalid: true };
+    outs.push({ amt: amts[i]!, k: mk.k + 1 + i, out });
+  }
+  const changeAtoms = total - sum, changeK = mk.k + 1 + amts.length, changeOut = changeAtoms > 0n ? t.vout[changeK] : undefined;
+  if (changeAtoms > 0n && !coinOut(changeOut)) return { invalid: true };
+  return { mk, seals, outs, changeAtoms, changeK, changeOut };
+}
+
+export function applySpTransfer(c: Ctx, t: Tx, height: number, s: Exclude<SpShape, { invalid: true }>) {
+  const tick = s.mk.tick;
+  for (const x of s.seals) revealOwner(c, t, x.seal, x.vin, tickCmr(c, tick) ?? undefined);
+  tx(c.db, () => {
+    for (const x of s.seals) spendSeal(c.db, x.seal.outpoint, t.txid);
+    for (const o of s.outs) {
+      const toBurn = o.out.scriptpubkey_address === c.directBurn;
+      if (toBurn) addBurnedAtoms(c.db, o.amt, tick);
+      else createSeal(c.db, { outpoint: `${t.txid}:${o.k}`, tick, txid: t.txid, vout: o.k, height, owner_address: o.out.scriptpubkey_address, amount_atoms: o.amt });
+      delta(c.db, height, t.txid, toBurn ? `burn:${tick}` : `transfer:${tick}`, s.seals[0]!.seal.owner_address, toBurn ? c.directBurn : o.out.scriptpubkey_address, o.amt);
+    }
+    if (s.changeAtoms > 0n)
+      createSeal(c.db, { outpoint: `${t.txid}:${s.changeK}`, tick, txid: t.txid, vout: s.changeK, height, owner_address: s.changeOut!.scriptpubkey_address!, amount_atoms: s.changeAtoms });
+  });
+}
+
 /* ── merge: one transfer marker, 2+ coins of its token, amt = their exact total (from its activation) ─────────────── */
 
 export function mergeShape(c: Ctx, t: Tx, height: number, markers: Marker[]): { mk: Marker; seals: SealIn[]; amt: bigint; recv: TxOut & { scriptpubkey_address: string } } | null {
@@ -188,3 +270,4 @@ export function applyMerge(c: Ctx, t: Tx, height: number, s: NonNullable<ReturnT
   });
 }
 
+void cmrHex;

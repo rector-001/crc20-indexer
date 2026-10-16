@@ -43,6 +43,7 @@ so only block headers are read, for reorg detection.
 | Chain | First block | Why |
 | --- | --- | --- |
 | mainnet | 968,367 | The block before the BONS deploy (968,368); the live ledger's first block |
+| signet | 324,041 | The signet BONS deploy |
 | regtest | 1 | |
 
 The first block is in `src/protocol/constants`, not a setting. Starting anywhere else would build a different
@@ -78,9 +79,10 @@ known (pinned), the raw block is not parsed for the rules at all.
 1. **Reorg check.** If the block's previous hash is not the one stored for the height below, roll back (§6).
 2. **Apply the rules** to every transaction in block order. Each transaction is settled by exactly one rule, all
    or nothing.
-3. **Link owners** (§7). This is not consensus.
-4. **Record** the block hash and advance the cursor.
-5. **Commit.** During the initial sync, `--commit-interval` blocks (default 1,000) share one SQLite transaction,
+3. **End of block:** curve-pool positions whose lock has matured are paid into their payback slots.
+4. **Link owners** (§7). This is not consensus.
+5. **Record** the block hash and advance the cursor.
+6. **Commit.** During the initial sync, `--commit-interval` blocks (default 1,000) share one SQLite transaction,
    like ord. Within 24 blocks of the tip, every block is its own commit.
 
 ## 5. Storage
@@ -97,6 +99,7 @@ relational, and there is no native build.
 | `meta` | the cursor and the counters: minted, minted on the opening slope, burned, raised, per token | yes |
 | `pob_used`, `bons_fills`, `launch_payments`, `launch_refunds` | launchpad bookkeeping read off the chain | yes |
 | `blocks`, `oracle` | the hash and the BTC/USD of every indexed height | yes |
+| `amm_pools`, `amm_positions`, `amm_pool_log`, `amm_share_log` | curve pools: reserves, shares, LP positions and their payback slots, and the history a reorg restores | yes |
 | `covenant_owners`, `key_book`, `cov_book` | proven owners of covenants (§7) | no |
 
 `crc20 index export` dumps every consensus table in a fixed order and prints its sha256. Two nodes at the same

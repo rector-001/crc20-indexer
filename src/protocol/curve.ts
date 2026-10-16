@@ -6,7 +6,7 @@
 //                   network's `curveOpeningPayer` address
 //   linear slope  — p0 -> 4·p0 over the other 90%, p0 = 2·$35,000 / (5 · 18,900,000); each mint priced at the spot price
 //                   of the supply already minted on this slope (a snapshot, not the area)
-// Bonding-token curve: p0 -> 4·p0 over 1,000,000,000 tokens, each purchase paying the exact AREA, in sats (micro-sats).
+// Launch curve: p0 -> 4·p0 over 1,000,000,000 tokens, each purchase paying the exact AREA, in sats (micro-sats).
 
 export const ONE = 100_000_000n;                 // atoms per whole token
 const USD1 = 1_000_000n;                         // micro-USD per USD
@@ -109,3 +109,35 @@ export function bonsBudgetMicroSats(rates: { btc: string; bons: string }, bonsAt
   if (!rb || !rn) return 0n;
   return (bonsAtoms * rn * 1_000_000n) / rb;
 }
+
+/* ── curve pools (x·y = k), with the 2% fee in BONS ──────────────────────────────────────────────────────────────── */
+
+export const AMM_LP_FEE_BPS = 100n;
+export const AMM_PROTOCOL_FEE_BPS = 200n;
+export const AMM_MIN_SHARES = 1000n;
+export const AMM_LOCKS = [0, 144, 1008, 4320];
+export const AMM_FEE_ROLES = ["creator", "protocol", "holders", "partner"] as const;
+export type AmmFeeRole = (typeof AMM_FEE_ROLES)[number];
+
+/** creator / protocol / holders / partner shares of the 2% fee (protocol takes the rounding) */
+export function ammFeeSplit(fee: bigint): Record<AmmFeeRole, bigint> {
+  const creator = (fee * 35n) / 200n, holders = (fee * 35n) / 200n, partner = (fee * 30n) / 200n;
+  return { creator, protocol: fee - creator - holders - partner, holders, partner };
+}
+
+export function ammSwapMath(p: { buy: boolean; amt: bigint; Rin: bigint; Rout: bigint; feeOn: boolean }) {
+  const { buy, amt, Rin, Rout, feeOn } = p;
+  const afterLp = (amt * (10000n - AMM_LP_FEE_BPS)) / 10000n, lp = amt - afterLp;
+  if (buy) {
+    const proto = feeOn ? (amt * AMM_PROTOCOL_FEE_BPS) / 10000n : 0n;
+    const inNet = afterLp - proto, inPool = amt - proto;
+    const out = inNet > 0n ? (inNet * Rout) / (Rin + inNet) : 0n;
+    return { inNet, inPool, out, outPool: out, proto, lp };
+  }
+  const inNet = afterLp;
+  const outPool = inNet > 0n ? (inNet * Rout) / (Rin + inNet) : 0n;
+  const proto = feeOn ? (outPool * AMM_PROTOCOL_FEE_BPS) / 10000n : 0n;
+  return { inNet, inPool: amt, out: outPool - proto, outPool, proto, lp };
+}
+
+export const isqrtN = (n: bigint): bigint => { if (n < 2n) return n; let x = n, y = (x + 1n) / 2n; while (y < x) { x = y; y = (x + n / x) / 2n; } return x; };
